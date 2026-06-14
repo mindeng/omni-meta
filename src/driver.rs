@@ -27,10 +27,23 @@ impl Collector {
 }
 
 /// 在一整块内存缓冲上驱动 parser 跑到 Done。
+///
+/// 终止保证：每次迭代要么前进、要么 break；并设有迭代预算兜底，
+/// 因此任何（含畸形/恶意）解析器都不会让它死循环。
 pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> Collector {
     let mut col = Collector { exif: Vec::new(), warnings: Vec::new(), limits };
     let mut pos: usize = 0;
+    // 防卡死预算：正常解析的 pull 次数远小于此（约等于段/box 数量）；
+    // 仅用于解析器反复 SeekTo 同一位置等零前进情形的兜底。
+    let max_iters = buf.len().saturating_mul(2).saturating_add(1024);
+    let mut iters: usize = 0;
     loop {
+        if iters >= max_iters {
+            col.warnings.push(Warning { offset: pos as u64, kind: WarnKind::UnreachableSection });
+            break;
+        }
+        iters += 1;
+
         let start = pos.min(buf.len());
         let res = parser.pull(&buf[start..]);
         for ev in res.events {
@@ -44,19 +57,33 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
                 break;
             }
             Demand::Skip(n) => {
-                pos = start.saturating_add(res.consumed).saturating_add(n as usize);
-                if pos > buf.len() {
-                    col.warnings.push(Warning { offset: pos as u64, kind: WarnKind::UnreachableSection });
-                    break;
+                // 用 u64 计算目标偏移（供诊断保真）；转回 usize 溢出即按越界处理。
+                let target = (start as u64)
+                    .saturating_add(res.consumed as u64)
+                    .saturating_add(n);
+                match usize::try_from(target) {
+                    Ok(p) if p <= buf.len() => {
+                        if p == start {
+                            // 零前进（consumed==0 且 n==0）→ 防卡死，按截断收尾。
+                            col.warnings.push(Warning { offset: start as u64, kind: WarnKind::Truncated });
+                            break;
+                        }
+                        pos = p;
+                    }
+                    _ => {
+                        col.warnings.push(Warning { offset: target, kind: WarnKind::UnreachableSection });
+                        break;
+                    }
                 }
             }
             Demand::SeekTo(p) => {
-                let p = p as usize;
-                if p > buf.len() {
-                    col.warnings.push(Warning { offset: p as u64, kind: WarnKind::UnreachableSection });
-                    break;
+                match usize::try_from(p) {
+                    Ok(up) if up <= buf.len() => pos = up,
+                    _ => {
+                        col.warnings.push(Warning { offset: p, kind: WarnKind::UnreachableSection });
+                        break;
+                    }
                 }
-                pos = p;
             }
         }
     }
@@ -66,6 +93,90 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::demand::PullResult;
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    /// 按脚本依次返回 Demand（consumed=0，无事件）；脚本耗尽后返回 Done。
+    struct Script {
+        steps: Vec<Demand>,
+        i: usize,
+    }
+    impl MetaParser for Script {
+        fn pull<'a>(&mut self, _input: &'a [u8]) -> PullResult<'a> {
+            let demand = self.steps.get(self.i).cloned().unwrap_or(Demand::Done);
+            self.i += 1;
+            PullResult { demand, consumed: 0, events: Vec::new() }
+        }
+    }
+
+    /// 永远返回 Skip(0)（零前进）的恶意解析器。
+    struct AlwaysSkipZero;
+    impl MetaParser for AlwaysSkipZero {
+        fn pull<'a>(&mut self, _input: &'a [u8]) -> PullResult<'a> {
+            PullResult { demand: Demand::Skip(0), consumed: 0, events: Vec::new() }
+        }
+    }
+
+    /// 永远 SeekTo(0)（反复回到同一位置）的恶意解析器。
+    struct AlwaysSeekZero;
+    impl MetaParser for AlwaysSeekZero {
+        fn pull<'a>(&mut self, _input: &'a [u8]) -> PullResult<'a> {
+            PullResult { demand: Demand::SeekTo(0), consumed: 0, events: Vec::new() }
+        }
+    }
+
+    #[test]
+    fn skip_advances_then_done() {
+        let buf = [0u8; 20];
+        let mut p = Script { steps: vec![Demand::Skip(10)], i: 0 };
+        let col = drive_slice(&buf, &mut p, Limits::default());
+        assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
+    }
+
+    #[test]
+    fn seek_within_bounds_then_done() {
+        let buf = [0u8; 20];
+        let mut p = Script { steps: vec![Demand::SeekTo(5)], i: 0 };
+        let col = drive_slice(&buf, &mut p, Limits::default());
+        assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
+    }
+
+    #[test]
+    fn seek_past_end_warns_unreachable() {
+        let buf = [0u8; 4];
+        let mut p = Script { steps: vec![Demand::SeekTo(9999)], i: 0 };
+        let col = drive_slice(&buf, &mut p, Limits::default());
+        assert_eq!(col.warnings.len(), 1);
+        assert_eq!(col.warnings[0].kind, WarnKind::UnreachableSection);
+    }
+
+    #[test]
+    fn need_bytes_yields_truncated_warning() {
+        let buf = [0u8; 4];
+        let mut p = Script { steps: vec![Demand::NeedBytes(99)], i: 0 };
+        let col = drive_slice(&buf, &mut p, Limits::default());
+        assert_eq!(col.warnings.len(), 1);
+        assert_eq!(col.warnings[0].kind, WarnKind::Truncated);
+    }
+
+    #[test]
+    fn zero_progress_skip_terminates() {
+        // 必须返回（不得死循环），并留下一条警告。
+        let buf = [0u8; 8];
+        let mut p = AlwaysSkipZero;
+        let col = drive_slice(&buf, &mut p, Limits::default());
+        assert!(!col.warnings.is_empty());
+    }
+
+    #[test]
+    fn oscillating_seek_terminates_via_budget() {
+        // 反复 SeekTo 同一位置 → 迭代预算兜底，必须返回。
+        let buf = [0u8; 8];
+        let mut p = AlwaysSeekZero;
+        let col = drive_slice(&buf, &mut p, Limits::default());
+        assert!(!col.warnings.is_empty());
+    }
 
     /// 用真实 JPEG 解析器 + 真实 EXIF 走一遍，验证驱动把载荷送进了 codec。
     #[test]
