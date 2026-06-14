@@ -17,7 +17,10 @@ pub mod driver;
 
 pub use adapters::slice::{read_slice, Options};
 pub use error::Error;
-pub use model::{FileFormat, Metadata, Orientation, RawTags, Unified, Value};
+pub use limits::Limits;
+pub use model::{
+    ExifTag, FileFormat, Metadata, Orientation, RawTags, Unified, Value, WarnKind, Warning,
+};
 
 #[cfg(test)]
 mod smoke {

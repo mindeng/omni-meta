@@ -9,7 +9,7 @@ use crate::normalize::normalize;
 use crate::probe::probe;
 
 /// 解析选项。
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Options {
     pub limits: Limits,
 }

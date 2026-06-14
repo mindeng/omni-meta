@@ -1,6 +1,6 @@
 //! 解析不可信输入时的分配上界，防 OOM / 解压炸弹 / 深递归。
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
     pub max_payload_bytes: usize,
     pub max_retained_bytes: usize,

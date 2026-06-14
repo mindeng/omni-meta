@@ -1,6 +1,6 @@
 //! 端到端：从带 EXIF 的 JPEG 字节经公开 API 读出统一字段。
 
-use omni_meta::{read_slice, FileFormat, Options, Orientation};
+use omni_meta::{read_slice, Error, FileFormat, Options, Orientation};
 
 /// 构造小端 TIFF：Make="Acme"(0x010F) + Orientation=6(0x0112)。
 fn make_tiff() -> Vec<u8> {
@@ -51,5 +51,5 @@ fn extracts_unified_fields_from_jpeg() {
 #[test]
 fn unrecognized_format_errors() {
     let err = read_slice(&[0x00, 0x01, 0x02], Options::default());
-    assert!(err.is_err());
+    assert_eq!(err, Err(Error::UnrecognizedFormat));
 }
