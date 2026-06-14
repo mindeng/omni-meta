@@ -51,10 +51,18 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
         }
         match res.demand {
             Demand::Done => break,
-            Demand::NeedBytes(_) => {
-                // slice 不会再增长 → 截断。
-                col.warnings.push(Warning { offset: start as u64, kind: WarnKind::Truncated });
-                break;
+            Demand::NeedBytes(n) => {
+                // 截断点 = 解析器卡住的绝对位置（slice 永不丢弃前缀 → start 即绝对）。
+                let stuck = start.saturating_add(res.consumed);
+                let avail = buf.len().saturating_sub(stuck);
+                if avail >= n && stuck > start {
+                    // 已有足够字节且有推进 → 续跑（增量 parser 的正常路径）。
+                    pos = stuck;
+                } else {
+                    // 字节确实不够（slice 给的是全量剩余）→ 截断。
+                    col.warnings.push(Warning { offset: stuck as u64, kind: WarnKind::Truncated });
+                    break;
+                }
             }
             Demand::Skip(n) => {
                 // 用 u64 计算目标偏移（供诊断保真）；转回 usize 溢出即按越界处理。
@@ -200,10 +208,25 @@ mod tests {
         j.extend_from_slice(&seg_body);
         j.extend_from_slice(&[0xFF, 0xD9]);
 
-        let mut parser = crate::formats::jpeg::JpegParser;
+        let mut parser = crate::formats::jpeg::JpegParser::new();
         let col = drive_slice(&j, &mut parser, Limits::default());
         assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
         assert_eq!(col.exif.len(), 2);
+    }
+
+    #[test]
+    fn slice_truncated_app1_warns_with_offset() {
+        // SOI + APP1(声明 len=20) 但 body 截断
+        let mut j: Vec<u8> = Vec::new();
+        j.extend_from_slice(&[0xFF, 0xD8, 0xFF, 0xE1]);
+        j.extend_from_slice(&20u16.to_be_bytes());
+        j.extend_from_slice(&[0xAA, 0xBB]); // body 不足
+        let mut parser = crate::formats::jpeg::JpegParser::new();
+        let col = drive_slice(&j, &mut parser, Limits::default());
+        assert_eq!(col.warnings.len(), 1);
+        assert_eq!(col.warnings[0].kind, WarnKind::Truncated);
+        // 卡在 APP1 段起点（SOI 之后）= 偏移 2
+        assert_eq!(col.warnings[0].offset, 2);
     }
 
     fn make_tiff() -> Vec<u8> {

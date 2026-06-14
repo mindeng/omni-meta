@@ -18,7 +18,7 @@ pub struct Options {
 pub fn read_slice(buf: &[u8], opts: Options) -> Result<Metadata, Error> {
     match probe(buf) {
         FileFormat::Jpeg => {
-            let mut parser = JpegParser;
+            let mut parser = JpegParser::new();
             let col = drive_slice(buf, &mut parser, opts.limits);
             let raw = RawTags { exif: col.exif };
             // normalize 可能追加 UnrecognizedValue 警告，故复用 driver 收集的警告向量。

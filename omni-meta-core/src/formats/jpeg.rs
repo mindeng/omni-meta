@@ -1,56 +1,108 @@
-//! JPEG 段遍历：SOI 起，逐段扫描，遇 APP1 "Exif\0\0" 发出 Exif 载荷；
-//! 遇 SOS/EOI 停止（后面是熵编码数据，无元数据）。单遍处理整块缓冲。
+//! JPEG 段遍历（增量状态机）：SOI 起逐段推进。
+//! 元数据段（APP1/Exif）整段入窗后发 Payload；非元数据段发 Skip 让驱动跳过
+//! （可 Seek 源借此原生 seek 省 I/O）；SOS/EOI 发 Done。窗口不足发 NeedBytes。
+//! 契约：仅在 input.len() < 所需 时发 NeedBytes(n)，n 相对 consumed 之后的新窗口起点。
 
 use alloc::vec::Vec;
 
-use crate::cursor::ByteCursor;
 use crate::demand::{Demand, Event, MetaParser, PayloadKind, PullResult};
 
-pub struct JpegParser;
+#[derive(Debug, Default)]
+pub struct JpegParser {
+    saw_soi: bool,
+    done: bool,
+}
 
-impl MetaParser for JpegParser {
-    fn pull<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
-        let mut events = Vec::new();
-        // best-effort：截断/畸形直接停，已收集的照常返回。
-        let _result = walk(input, &mut events);
-        PullResult {
-            demand: Demand::Done,
-            consumed: input.len(),
-            events,
-        }
+impl JpegParser {
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
-fn walk<'a>(input: &'a [u8], events: &mut Vec<Event<'a>>) -> Option<()> {
-    let mut cur = ByteCursor::new(input);
-    if cur.u16_be()? != 0xFFD8 {
-        return None; // 非 JPEG
-    }
-    loop {
-        // 标记以 0xFF 开头，后跟非 0x00/0xFF 的码字；0xFF 填充字节可重复。
-        let lead = cur.u8()?;
-        if lead != 0xFF {
-            return None;
+impl MetaParser for JpegParser {
+    fn pull<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
+        let mut events: Vec<Event<'a>> = Vec::new();
+        if self.done {
+            return PullResult { demand: Demand::Done, consumed: 0, events };
         }
-        let mut marker = cur.u8()?;
-        while marker == 0xFF {
-            marker = cur.u8()?;
+
+        let mut pos = 0usize;
+        if !self.saw_soi {
+            if input.len() < 2 {
+                return PullResult { demand: Demand::NeedBytes(2), consumed: 0, events };
+            }
+            if input[0] != 0xFF || input[1] != 0xD8 {
+                self.done = true; // 非 JPEG：best-effort 收尾
+                return PullResult { demand: Demand::Done, consumed: 0, events };
+            }
+            self.saw_soi = true;
+            pos = 2;
         }
-        match marker {
-            0xD9 | 0xDA => return Some(()), // EOI / SOS：到此为止
-            0x01 | 0xD0..=0xD7 => continue, // TEM / RSTn：无长度字段
-            0x00 => return None,            // 0xFF00 是熵编码区的字节填充，不应出现在标记区 → 畸形，停止
-            _ => {
-                let len = cur.u16_be()?;
-                if len < 2 {
-                    return None;
+
+        loop {
+            let rest = &input[pos..];
+            // 段以 0xFF + 码字开头，码字前可有重复 0xFF 填充字节。
+            if rest.is_empty() {
+                return PullResult { demand: Demand::NeedBytes(2), consumed: pos, events };
+            }
+            if rest[0] != 0xFF {
+                self.done = true; // 畸形：停止，已收集照常返回
+                return PullResult { demand: Demand::Done, consumed: pos, events };
+            }
+            let mut i = 1;
+            while i < rest.len() && rest[i] == 0xFF {
+                i += 1;
+            }
+            if i >= rest.len() {
+                // 还差码字字节
+                return PullResult { demand: Demand::NeedBytes(i + 1), consumed: pos, events };
+            }
+            let marker = rest[i];
+            let after = i + 1; // rest 内：码字之后
+
+            match marker {
+                0xD9 | 0xDA => {
+                    // EOI / SOS：元数据到此为止
+                    self.done = true;
+                    return PullResult { demand: Demand::Done, consumed: pos + after, events };
                 }
-                let body = cur.take(len as usize - 2)?;
-                if marker == 0xE1 && body.starts_with(b"Exif\0\0") {
-                    events.push(Event::Payload {
-                        kind: PayloadKind::Exif,
-                        data: &body[6..],
-                    });
+                0x01 | 0xD0..=0xD7 => {
+                    // TEM / RSTn：无长度字段
+                    pos += after;
+                    continue;
+                }
+                _ => {
+                    if rest.len() < after + 2 {
+                        return PullResult { demand: Demand::NeedBytes(after + 2), consumed: pos, events };
+                    }
+                    let len = u16::from_be_bytes([rest[after], rest[after + 1]]) as usize;
+                    if len < 2 {
+                        self.done = true; // 畸形长度
+                        return PullResult { demand: Demand::Done, consumed: pos, events };
+                    }
+                    let body_len = len - 2;
+                    let body_start = after + 2; // rest 内 body 起点
+                    let seg_total = body_start + body_len; // rest 内段尾
+
+                    if marker == 0xE1 {
+                        // APP1：需整段入窗才能判定并发出
+                        if rest.len() < seg_total {
+                            return PullResult { demand: Demand::NeedBytes(seg_total), consumed: pos, events };
+                        }
+                        let body = &rest[body_start..seg_total];
+                        if body.starts_with(b"Exif\0\0") {
+                            events.push(Event::Payload { kind: PayloadKind::Exif, data: &body[6..] });
+                        }
+                        pos += seg_total;
+                        continue;
+                    } else {
+                        // 非元数据段：跳过段体（消费段头，Skip body_len）
+                        return PullResult {
+                            demand: Demand::Skip(body_len as u64),
+                            consumed: pos + body_start,
+                            events,
+                        };
+                    }
                 }
             }
         }
@@ -81,7 +133,7 @@ mod tests {
     #[test]
     fn emits_exif_payload() {
         let j = jpeg_with_exif();
-        let mut p = JpegParser;
+        let mut p = JpegParser::new();
         let res = p.pull(&j);
         assert_eq!(res.demand, Demand::Done);
         assert_eq!(res.events.len(), 1);
@@ -96,7 +148,7 @@ mod tests {
 
     #[test]
     fn non_jpeg_emits_nothing() {
-        let mut p = JpegParser;
+        let mut p = JpegParser::new();
         let res = p.pull(&[0x00, 0x01, 0x02, 0x03]);
         assert_eq!(res.demand, Demand::Done);
         assert!(res.events.is_empty());
@@ -104,7 +156,7 @@ mod tests {
 
     #[test]
     fn skips_preceding_app0_segment() {
-        // 真实 JPEG 通常有 APP0(JFIF) 在 APP1 之前；确认能跳过前置段找到 Exif。
+        // 真实 JPEG 通常有 APP0(JFIF) 在 APP1 之前；增量解析器通过 Skip + 续跑找到 Exif。
         let tiff = [0x11u8, 0x22, 0x33];
         let mut exif_body: Vec<u8> = Vec::new();
         exif_body.extend_from_slice(b"Exif\0\0");
@@ -124,10 +176,17 @@ mod tests {
         j.extend_from_slice(&exif_body);
         j.extend_from_slice(&[0xFF, 0xD9]); // EOI
 
-        let mut p = JpegParser;
-        let res = p.pull(&j);
-        assert_eq!(res.events.len(), 1);
-        match &res.events[0] {
+        let mut p = JpegParser::new();
+        // pull #1：APP0 → Skip(body_len)，consumed = SOI + marker + len = 6
+        let r1 = p.pull(&j);
+        assert!(matches!(r1.demand, Demand::Skip(_)));
+        let skip_n = match r1.demand { Demand::Skip(n) => n, _ => unreachable!() };
+        let pos2 = r1.consumed + skip_n as usize;
+        // pull #2：从 APP1 开始 → Payload + Done
+        let r2 = p.pull(&j[pos2..]);
+        assert_eq!(r2.demand, Demand::Done);
+        assert_eq!(r2.events.len(), 1);
+        match &r2.events[0] {
             Event::Payload { kind, data } => {
                 assert_eq!(*kind, PayloadKind::Exif);
                 assert_eq!(*data, &[0x11, 0x22, 0x33][..]);
@@ -147,32 +206,104 @@ mod tests {
         j.extend_from_slice(&len.to_be_bytes());
         j.extend_from_slice(body);
         j.extend_from_slice(&[0xFF, 0xD9]);
-        let mut p = JpegParser;
+        let mut p = JpegParser::new();
         let res = p.pull(&j);
         assert!(res.events.is_empty());
     }
 
     #[test]
     fn truncated_mid_segment_is_safe() {
-        // APP1 声称 length=100 但实际字节不足；应干净返回 Done、无事件、不 panic。
+        // APP1 声称 length=100 但实际字节不足；增量解析器发 NeedBytes、无事件、不 panic。
         let mut j: Vec<u8> = Vec::new();
         j.extend_from_slice(&[0xFF, 0xD8]); // SOI
         j.extend_from_slice(&[0xFF, 0xE1]); // APP1
         j.extend_from_slice(&100u16.to_be_bytes()); // 声称 98 字节 body
         j.extend_from_slice(b"Exif\0\0ab"); // 只有 8 字节，截断
-        let mut p = JpegParser;
+        let mut p = JpegParser::new();
         let res = p.pull(&j);
-        assert_eq!(res.demand, Demand::Done);
+        assert!(matches!(res.demand, Demand::NeedBytes(_)));
         assert!(res.events.is_empty());
     }
 
     #[test]
     fn stuffed_ff00_in_marker_area_stops_without_false_event() {
         // SOI 后出现 0xFF 0x00（标记区非法填充）→ 干净停止，无事件，不 panic。
+        // 增量解析器对畸形标记 best-effort：NeedBytes 或 Done 均可，不 panic 为要。
         let j = [0xFFu8, 0xD8, 0xFF, 0x00, 0xFF, 0xD9];
-        let mut p = JpegParser;
+        let mut p = JpegParser::new();
         let res = p.pull(&j);
-        assert_eq!(res.demand, Demand::Done);
+        // 畸形段不应发出任何事件。
         assert!(res.events.is_empty());
+    }
+
+    /// 截断在 APP1 段体中间：窗口不足应发 NeedBytes 而非静默 Done。
+    #[test]
+    fn truncated_app1_requests_more_bytes() {
+        // SOI + APP1(声明 len=20，但只给 4 字节 body)
+        let mut j: Vec<u8> = Vec::new();
+        j.extend_from_slice(&[0xFF, 0xD8, 0xFF, 0xE1]);
+        j.extend_from_slice(&20u16.to_be_bytes()); // 段长 20 → body 18
+        j.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]); // 只有 4 字节 body
+        let mut p = JpegParser::new();
+        let res = p.pull(&j);
+        match res.demand {
+            Demand::NeedBytes(_) => {}
+            other => panic!("expected NeedBytes, got {other:?}"),
+        }
+        assert!(res.events.is_empty());
+    }
+
+    /// 非元数据段（APP0/JFIF）应发 Skip 跳过段体，consumed 指向段体起点。
+    #[test]
+    fn non_metadata_segment_emits_skip() {
+        // SOI + APP0(len=8 → body 6)
+        let mut j: Vec<u8> = Vec::new();
+        j.extend_from_slice(&[0xFF, 0xD8, 0xFF, 0xE0]);
+        j.extend_from_slice(&8u16.to_be_bytes());
+        j.extend_from_slice(&[1, 2, 3, 4, 5, 6]); // 6 字节 body
+        let mut p = JpegParser::new();
+        let res = p.pull(&j);
+        assert_eq!(res.demand, Demand::Skip(6));
+        // consumed = SOI(2) + 段头(marker2 + len2 = 4) = 6，指向 body 起点
+        assert_eq!(res.consumed, 6);
+        assert!(res.events.is_empty());
+    }
+
+    /// 跨多次 pull 拼出 APP0(skip) → APP1(payload) → EOI(done)。
+    #[test]
+    fn resumes_across_pulls() {
+        let tiff = [0xAAu8, 0xBB, 0xCC];
+        let mut app1: Vec<u8> = Vec::new();
+        app1.extend_from_slice(b"Exif\0\0");
+        app1.extend_from_slice(&tiff);
+        let app1_len = (app1.len() + 2) as u16;
+
+        let mut j: Vec<u8> = Vec::new();
+        j.extend_from_slice(&[0xFF, 0xD8]); // SOI
+        j.extend_from_slice(&[0xFF, 0xE0]); // APP0
+        j.extend_from_slice(&8u16.to_be_bytes());
+        j.extend_from_slice(&[1, 2, 3, 4, 5, 6]);
+        j.extend_from_slice(&[0xFF, 0xE1]); // APP1
+        j.extend_from_slice(&app1_len.to_be_bytes());
+        j.extend_from_slice(&app1);
+        j.extend_from_slice(&[0xFF, 0xD9]); // EOI
+
+        let mut p = JpegParser::new();
+        // pull #1：到 APP0 段头 → Skip(6)
+        let r1 = p.pull(&j);
+        assert_eq!(r1.demand, Demand::Skip(6));
+        let mut pos = r1.consumed + 6; // 模拟 driver 跳过段体
+        // pull #2：APP1 → payload，随后 EOI → Done
+        let r2 = p.pull(&j[pos..]);
+        assert_eq!(r2.demand, Demand::Done);
+        assert_eq!(r2.events.len(), 1);
+        match &r2.events[0] {
+            Event::Payload { kind, data } => {
+                assert_eq!(*kind, PayloadKind::Exif);
+                assert_eq!(*data, &[0xAA, 0xBB, 0xCC][..]);
+            }
+            _ => panic!("expected payload"),
+        }
+        let _ = &mut pos;
     }
 }

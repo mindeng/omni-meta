@@ -39,10 +39,13 @@ impl<'a> ByteCursor<'a> {
         Some(s)
     }
 
+    // u8/u16_be：供未来格式解析器使用，当前仅测试覆盖，显式允许暂未使用。
+    #[allow(dead_code)]
     pub fn u8(&mut self) -> Option<u8> {
         self.take(1).map(|s| s[0])
     }
 
+    #[allow(dead_code)]
     pub fn u16_be(&mut self) -> Option<u16> {
         self.take(2).map(|s| u16::from_be_bytes([s[0], s[1]]))
     }
