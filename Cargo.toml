@@ -1,14 +1,3 @@
-[package]
-name = "omni-meta"
-version = "0.1.0"
-edition = "2024"
-
-[lib]
-name = "omni_meta"
-path = "src/lib.rs"
-
-[features]
-default = ["std"]
-std = []
-
-[dependencies]
+[workspace]
+resolver = "2"
+members = ["omni-meta-core", "omni-meta"]

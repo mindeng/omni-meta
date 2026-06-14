@@ -1,0 +1,15 @@
+[package]
+name = "omni-meta"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "omni_meta"
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+std = ["omni-meta-core/std"]
+
+[dependencies]
+omni-meta-core = { path = "../omni-meta-core" }

@@ -5,3 +5,10 @@ version = 4
 [[package]]
 name = "omni-meta"
 version = "0.1.0"
+dependencies = [
+ "omni-meta-core",
+]
+
+[[package]]
+name = "omni-meta-core"
+version = "0.1.0"
