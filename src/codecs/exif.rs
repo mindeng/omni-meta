@@ -78,17 +78,25 @@ fn parse_ifd(
             Some(s) => s,
             None => break,
         };
-        if let Some(val) = read_value(tiff, e, typ, cnt, valoff) {
+        if let Some(val) = read_value(tiff, e, typ, cnt, valoff, limits.max_payload_bytes) {
             out.push(ExifTag { ifd: 0, tag, value: val });
         }
     }
 }
 
-fn read_value(tiff: &[u8], e: Endian, typ: u16, cnt: u32, valoff: &[u8]) -> Option<Value> {
+fn read_value(
+    tiff: &[u8],
+    e: Endian,
+    typ: u16,
+    cnt: u32,
+    valoff: &[u8],
+    max_value_bytes: usize,
+) -> Option<Value> {
+    debug_assert_eq!(valoff.len(), 4);
     match typ {
         // SHORT：本计划只取 cnt==1。
         3 => {
-            if cnt != 1 || valoff.len() < 2 {
+            if cnt != 1 {
                 return None;
             }
             let v = match e {
@@ -100,8 +108,14 @@ fn read_value(tiff: &[u8], e: Endian, typ: u16, cnt: u32, valoff: &[u8]) -> Opti
         // ASCII：<=4 字节内联，否则按偏移取。
         2 => {
             let total = cnt as usize;
+            // cnt==0 畸形（ASCII 至少含 NUL）；total 超上界则丢弃，
+            // 防止 max_tags 条目各自分配大字符串造成聚合放大。
+            // 注：完整的 max_total_alloc 预算化留待后续硬化/模糊测试计划。
+            if total == 0 || total > max_value_bytes {
+                return None;
+            }
             let bytes: &[u8] = if total <= 4 {
-                &valoff[..total.min(valoff.len())]
+                &valoff[..total]
             } else {
                 let off = match e {
                     Endian::Little => {
@@ -170,6 +184,87 @@ mod tests {
         let mut out = Vec::new();
         let mut warns = Vec::new();
         decode(b"XX", &mut out, &mut warns, &Limits::default());
+        assert!(out.is_empty());
+        assert_eq!(warns.len(), 1);
+        assert_eq!(warns[0].kind, WarnKind::BadExifHeader);
+    }
+
+    /// 大端 (MM) 版本：同样 Make="Acme" + Orientation=6。
+    fn tiff_fixture_be() -> Vec<u8> {
+        let mut t: Vec<u8> = Vec::new();
+        t.extend_from_slice(b"MM");
+        t.extend_from_slice(&42u16.to_be_bytes());
+        t.extend_from_slice(&8u32.to_be_bytes());
+        t.extend_from_slice(&2u16.to_be_bytes());
+        // Make, ASCII, count=5, offset=38
+        t.extend_from_slice(&0x010Fu16.to_be_bytes());
+        t.extend_from_slice(&2u16.to_be_bytes());
+        t.extend_from_slice(&5u32.to_be_bytes());
+        t.extend_from_slice(&38u32.to_be_bytes());
+        // Orientation, SHORT, count=1, 大端内联值=6（左对齐：00 06 00 00）
+        t.extend_from_slice(&0x0112u16.to_be_bytes());
+        t.extend_from_slice(&3u16.to_be_bytes());
+        t.extend_from_slice(&1u32.to_be_bytes());
+        t.extend_from_slice(&6u16.to_be_bytes()); // 高 2 字节 = 值
+        t.extend_from_slice(&0u16.to_be_bytes()); // 低 2 字节填充
+        // next IFD = 0
+        t.extend_from_slice(&0u32.to_be_bytes());
+        debug_assert_eq!(t.len(), 38);
+        t.extend_from_slice(b"Acme\0");
+        t
+    }
+
+    #[test]
+    fn decodes_big_endian() {
+        let tiff = tiff_fixture_be();
+        let mut out = Vec::new();
+        let mut warns = Vec::new();
+        decode(&tiff, &mut out, &mut warns, &Limits::default());
+        assert!(warns.is_empty(), "unexpected warnings: {:?}", warns);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], ExifTag { ifd: 0, tag: 0x010F, value: Value::Text(String::from("Acme")) });
+        assert_eq!(out[1], ExifTag { ifd: 0, tag: 0x0112, value: Value::U16(6) });
+    }
+
+    #[test]
+    fn max_tags_limit_is_enforced() {
+        let tiff = tiff_fixture();
+        let mut out = Vec::new();
+        let mut warns = Vec::new();
+        let limits = Limits { max_tags: 1, ..Limits::default() };
+        decode(&tiff, &mut out, &mut warns, &limits);
+        assert_eq!(out.len(), 1); // 第二个标签被上界截断
+    }
+
+    #[test]
+    fn out_of_bounds_ascii_offset_drops_tag_without_panic() {
+        // II,42,IFD0@8 | count=1 | ASCII cnt=100 offset=9999(越界) | next=0
+        let mut t: Vec<u8> = Vec::new();
+        t.extend_from_slice(b"II");
+        t.extend_from_slice(&42u16.to_le_bytes());
+        t.extend_from_slice(&8u32.to_le_bytes());
+        t.extend_from_slice(&1u16.to_le_bytes());
+        t.extend_from_slice(&0x010Fu16.to_le_bytes());
+        t.extend_from_slice(&2u16.to_le_bytes());
+        t.extend_from_slice(&100u32.to_le_bytes());
+        t.extend_from_slice(&9999u32.to_le_bytes());
+        t.extend_from_slice(&0u32.to_le_bytes());
+        let mut out = Vec::new();
+        let mut warns = Vec::new();
+        decode(&t, &mut out, &mut warns, &Limits::default());
+        assert!(out.is_empty()); // 越界偏移 → 丢弃该标签，不 panic
+    }
+
+    #[test]
+    fn ifd0_offset_past_end_warns_without_panic() {
+        // II,42,IFD0@9999(越界)
+        let mut t: Vec<u8> = Vec::new();
+        t.extend_from_slice(b"II");
+        t.extend_from_slice(&42u16.to_le_bytes());
+        t.extend_from_slice(&9999u32.to_le_bytes());
+        let mut out = Vec::new();
+        let mut warns = Vec::new();
+        decode(&t, &mut out, &mut warns, &Limits::default());
         assert!(out.is_empty());
         assert_eq!(warns.len(), 1);
         assert_eq!(warns[0].kind, WarnKind::BadExifHeader);
