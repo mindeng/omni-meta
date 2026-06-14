@@ -12,6 +12,7 @@ pub mod limits;
 pub mod model;
 pub mod normalize;
 pub mod probe;
+pub mod driver;
 
 #[cfg(test)]
 mod smoke {
