@@ -3,6 +3,8 @@
 
 extern crate alloc;
 
+pub mod cursor;
+
 #[cfg(test)]
 mod smoke {
     #[test]
