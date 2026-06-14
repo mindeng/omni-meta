@@ -78,7 +78,14 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
             }
             Demand::SeekTo(p) => {
                 match usize::try_from(p) {
-                    Ok(up) if up <= buf.len() => pos = up,
+                    Ok(up) if up <= buf.len() => {
+                        if up == start {
+                            // 零前进（SeekTo 回到当前位置）→ 防卡死，按截断收尾。
+                            col.warnings.push(Warning { offset: start as u64, kind: WarnKind::Truncated });
+                            break;
+                        }
+                        pos = up;
+                    }
                     _ => {
                         col.warnings.push(Warning { offset: p, kind: WarnKind::UnreachableSection });
                         break;
@@ -170,8 +177,8 @@ mod tests {
     }
 
     #[test]
-    fn oscillating_seek_terminates_via_budget() {
-        // 反复 SeekTo 同一位置 → 迭代预算兜底，必须返回。
+    fn zero_progress_seek_terminates() {
+        // SeekTo 回到当前位置（零前进）→ 防卡死，必须立即返回并留警告。
         let buf = [0u8; 8];
         let mut p = AlwaysSeekZero;
         let col = drive_slice(&buf, &mut p, Limits::default());
