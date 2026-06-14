@@ -4,6 +4,7 @@
 extern crate alloc;
 
 pub mod cursor;
+pub mod demand;
 pub mod error;
 pub mod limits;
 pub mod model;
