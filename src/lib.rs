@@ -3,6 +3,7 @@
 
 extern crate alloc;
 
+pub mod adapters;
 pub mod codecs;
 pub mod formats;
 pub mod cursor;
@@ -13,6 +14,10 @@ pub mod model;
 pub mod normalize;
 pub mod probe;
 pub mod driver;
+
+pub use adapters::slice::{read_slice, Options};
+pub use error::Error;
+pub use model::{FileFormat, Metadata, Orientation, RawTags, Unified, Value};
 
 #[cfg(test)]
 mod smoke {
