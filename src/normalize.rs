@@ -1,18 +1,32 @@
 //! 把原始标签投影成统一规范字段。映射规则集中在此，便于测试。
 
-use crate::model::{Orientation, RawTags, Unified, Value};
+use alloc::vec::Vec;
+
+use crate::model::{Orientation, RawTags, Unified, Value, WarnKind, Warning};
 
 const TAG_MAKE: u16 = 0x010F;
 const TAG_MODEL: u16 = 0x0110;
 const TAG_ORIENTATION: u16 = 0x0112;
 
-pub fn normalize(raw: &RawTags) -> Unified {
+/// 把原始标签投影到统一模型。
+///
+/// 遇到“存在但取值超出规范范围”的标签（如 orientation 不在 1..=8）时，
+/// 丢弃该值并向 `warnings` 追加一条 `WarnKind::UnrecognizedValue`，使调用者能
+/// 区分“缺失”与“存在但无法识别”。normalize 作用于已解码标签、无字节偏移，
+/// 故此类警告的 `offset` 固定为 0。
+pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
     let mut u = Unified::default();
     for t in &raw.exif {
         match (t.tag, &t.value) {
             (TAG_MAKE, Value::Text(s)) => u.camera_make = Some(s.clone()),
             (TAG_MODEL, Value::Text(s)) => u.camera_model = Some(s.clone()),
-            (TAG_ORIENTATION, Value::U16(v)) => u.orientation = Orientation::from_u16(*v),
+            (TAG_ORIENTATION, Value::U16(v)) => match Orientation::from_u16(*v) {
+                Some(o) => u.orientation = Some(o),
+                None => warnings.push(Warning {
+                    offset: 0,
+                    kind: WarnKind::UnrecognizedValue,
+                }),
+            },
             _ => {}
         }
     }
@@ -35,17 +49,23 @@ mod tests {
                 ExifTag { ifd: 0, tag: 0x0112, value: Value::U16(6) },
             ]),
         };
-        let u = normalize(&raw);
+        let mut warnings = Vec::new();
+        let u = normalize(&raw, &mut warnings);
         assert_eq!(u.camera_make.as_deref(), Some("Acme"));
         assert_eq!(u.camera_model.as_deref(), Some("X100"));
         assert_eq!(u.orientation, Some(Orientation::Rotate90));
+        assert!(warnings.is_empty(), "warnings: {:?}", warnings);
     }
 
     #[test]
-    fn unknown_orientation_value_is_dropped() {
+    fn unknown_orientation_value_is_dropped_with_warning() {
         let raw = RawTags {
             exif: Vec::from([ExifTag { ifd: 0, tag: 0x0112, value: Value::U16(99) }]),
         };
-        assert_eq!(normalize(&raw).orientation, None);
+        let mut warnings = Vec::new();
+        let u = normalize(&raw, &mut warnings);
+        assert_eq!(u.orientation, None);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].kind, WarnKind::UnrecognizedValue);
     }
 }

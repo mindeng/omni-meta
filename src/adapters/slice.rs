@@ -21,11 +21,13 @@ pub fn read_slice(buf: &[u8], opts: Options) -> Result<Metadata, Error> {
             let mut parser = JpegParser;
             let col = drive_slice(buf, &mut parser, opts.limits);
             let raw = RawTags { exif: col.exif };
-            let unified = normalize(&raw);
+            // normalize 可能追加 UnrecognizedValue 警告，故复用 driver 收集的警告向量。
+            let mut warnings = col.warnings;
+            let unified = normalize(&raw, &mut warnings);
             Ok(Metadata {
                 unified,
                 raw,
-                warnings: col.warnings,
+                warnings,
                 format: FileFormat::Jpeg,
             })
         }

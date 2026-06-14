@@ -73,6 +73,9 @@ pub enum WarnKind {
     Truncated,
     BadExifHeader,
     UnreachableSection,
+    /// 标签存在但取值超出规范范围（如 orientation 不在 1..=8），已丢弃。
+    /// 让调用者能区分“缺失”与“存在但无法识别”。
+    UnrecognizedValue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
