@@ -96,10 +96,16 @@ mod tests {
 
     #[test]
     fn orientation_maps_known_values() {
-        assert_eq!(Orientation::from_u16(6), Some(Orientation::Rotate90));
         assert_eq!(Orientation::from_u16(1), Some(Orientation::Normal));
-        assert_eq!(Orientation::from_u16(9), None);
+        assert_eq!(Orientation::from_u16(2), Some(Orientation::FlipH));
+        assert_eq!(Orientation::from_u16(3), Some(Orientation::Rotate180));
+        assert_eq!(Orientation::from_u16(4), Some(Orientation::FlipV));
+        assert_eq!(Orientation::from_u16(5), Some(Orientation::Transpose));
+        assert_eq!(Orientation::from_u16(6), Some(Orientation::Rotate90));
+        assert_eq!(Orientation::from_u16(7), Some(Orientation::Transverse));
+        assert_eq!(Orientation::from_u16(8), Some(Orientation::Rotate270));
         assert_eq!(Orientation::from_u16(0), None);
+        assert_eq!(Orientation::from_u16(9), None);
     }
 
     #[test]
