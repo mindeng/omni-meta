@@ -9,6 +9,7 @@ pub mod demand;
 pub mod error;
 pub mod limits;
 pub mod model;
+pub mod normalize;
 
 #[cfg(test)]
 mod smoke {
