@@ -4,6 +4,8 @@
 extern crate alloc;
 
 pub mod cursor;
+pub mod error;
+pub mod limits;
 
 #[cfg(test)]
 mod smoke {
