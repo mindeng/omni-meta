@@ -31,12 +31,13 @@ mod tests {
         let raw = RawTags {
             exif: Vec::from([
                 ExifTag { ifd: 0, tag: 0x010F, value: Value::Text(String::from("Acme")) },
+                ExifTag { ifd: 0, tag: 0x0110, value: Value::Text(String::from("X100")) },
                 ExifTag { ifd: 0, tag: 0x0112, value: Value::U16(6) },
             ]),
         };
         let u = normalize(&raw);
         assert_eq!(u.camera_make.as_deref(), Some("Acme"));
-        assert_eq!(u.camera_model, None);
+        assert_eq!(u.camera_model.as_deref(), Some("X100"));
         assert_eq!(u.orientation, Some(Orientation::Rotate90));
     }
 
