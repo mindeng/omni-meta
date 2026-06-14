@@ -11,6 +11,7 @@ pub mod error;
 pub mod limits;
 pub mod model;
 pub mod normalize;
+pub mod probe;
 
 #[cfg(test)]
 mod smoke {
