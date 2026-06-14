@@ -3,17 +3,19 @@
 
 extern crate alloc;
 
-pub mod adapters;
-pub mod codecs;
-pub mod formats;
-pub mod cursor;
-pub mod demand;
-pub mod error;
-pub mod limits;
-pub mod model;
-pub mod normalize;
-pub mod probe;
-pub mod driver;
+// 内部模块一律 pub(crate)：公开 API 仅通过下方精选的 `pub use` 暴露，
+// 避免内部路径（如 omni_meta::driver::drive_slice）固化成 semver 稳定面。
+pub(crate) mod adapters;
+pub(crate) mod codecs;
+pub(crate) mod formats;
+pub(crate) mod cursor;
+pub(crate) mod demand;
+pub(crate) mod error;
+pub(crate) mod limits;
+pub(crate) mod model;
+pub(crate) mod normalize;
+pub(crate) mod probe;
+pub(crate) mod driver;
 
 pub use adapters::slice::{read_slice, Options};
 pub use error::Error;

@@ -4,6 +4,10 @@ use alloc::vec::Vec;
 
 use crate::model::Warning;
 
+// NeedBytes/Skip/SeekTo 是 sans-io 契约的一部分，由 driver 测试构造、
+// 并将由后续的流式/Push 适配器与多格式解析器构造；当前生产路径（JPEG 全缓冲）
+// 只产出 Done，故显式允许它们暂未在非测试代码中构造。
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Demand {
     /// 需要至少 n 字节才能继续。
@@ -26,6 +30,9 @@ pub enum PayloadKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event<'a> {
     Payload { kind: PayloadKind, data: &'a [u8] },
+    /// 解析器内联产出的警告。当前 codec 直接写 warnings 向量；
+    /// 该变体供后续容器级解析器在事件流中携带警告，暂未在生产路径构造。
+    #[allow(dead_code)]
     Warning(Warning),
 }
 

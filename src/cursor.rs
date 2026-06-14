@@ -16,10 +16,14 @@ impl<'a> ByteCursor<'a> {
         Self { buf, pos: 0 }
     }
 
+    // position/remaining/skip 是游标基础工具：当前由测试覆盖，
+    // 将被后续格式解析器（PNG/BMFF 等）使用，故保留并显式允许暂未使用。
+    #[allow(dead_code)]
     pub fn position(&self) -> usize {
         self.pos
     }
 
+    #[allow(dead_code)]
     pub fn remaining(&self) -> usize {
         self.buf.len() - self.pos
     }
@@ -59,6 +63,7 @@ impl<'a> ByteCursor<'a> {
         })
     }
 
+    #[allow(dead_code)]
     pub fn skip(&mut self, n: usize) -> Option<()> {
         self.take(n).map(|_| ())
     }
