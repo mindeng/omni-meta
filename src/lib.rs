@@ -4,6 +4,7 @@
 extern crate alloc;
 
 pub mod codecs;
+pub mod formats;
 pub mod cursor;
 pub mod demand;
 pub mod error;
