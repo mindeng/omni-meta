@@ -70,8 +70,10 @@ pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
     // 时区：默认 None；对应 OffsetTime* 标签存在则解析 "±HH:MM"。
     let find = |ifd: IfdKind, tag: u16| -> Option<&str> {
         raw.exif.iter().find_map(|t| {
-            if t.ifd == ifd && t.tag == tag {
-                if let Value::Text(s) = &t.value { return Some(s.as_str()); }
+            if t.ifd == ifd && t.tag == tag
+                && let Value::Text(s) = &t.value
+            {
+                return Some(s.as_str());
             }
             None
         })
@@ -83,11 +85,11 @@ pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
     } else {
         (None, None)
     };
-    if let Some(s) = dt_str {
-        if let Some(mut dt) = parse_exif_datetime(s) {
-            dt.tz_offset_min = off_str.and_then(parse_exif_offset);
-            u.created = Some(dt);
-        }
+    if let Some(s) = dt_str
+        && let Some(mut dt) = parse_exif_datetime(s)
+    {
+        dt.tz_offset_min = off_str.and_then(parse_exif_offset);
+        u.created = Some(dt);
     }
     u
 }
