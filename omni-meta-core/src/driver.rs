@@ -187,6 +187,12 @@ impl StreamDriver {
                 return Outcome::Done;
             }
 
+            // 空窗口且未到 EOF：不要用空窗口回调解析器（顶层 box 链无大小字段，
+            // 解析器靠"空窗口=EOF"判终止；流式下边界处的空窗口不是 EOF）。请求更多字节。
+            if self.buf.len() == self.cursor && !self.eof {
+                return Outcome::Need(1);
+            }
+
             // 2) 拉解析器（拆分字段借用：parser &mut 与 buf & 互不相干）。
             let (demand, consumed) = {
                 let Self { buf, cursor, parser, collector, .. } = self;
@@ -405,6 +411,48 @@ mod tests {
         fn pull<'a>(&mut self, _input: &'a [u8]) -> PullResult<'a> {
             PullResult { demand: Demand::SeekTo(0), consumed: 0, events: Vec::new() }
         }
+    }
+
+    /// 模拟无容器大小的顶层走盒：先 Skip(4) 跳首盒，再在第二盒读 4 字节发 Width，
+    /// 空窗口视为 EOF→Done。用于验证驱动不会在边界处用空窗口提前结束。
+    struct TwoBoxParser {
+        skipped: bool,
+        emitted: bool,
+    }
+    impl MetaParser for TwoBoxParser {
+        fn pull<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
+            if input.is_empty() {
+                return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+            }
+            if !self.skipped {
+                if input.len() < 4 {
+                    return PullResult { demand: Demand::NeedBytes(4), consumed: 0, events: Vec::new() };
+                }
+                self.skipped = true;
+                return PullResult { demand: Demand::Skip(4), consumed: 0, events: Vec::new() };
+            }
+            if !self.emitted {
+                if input.len() < 4 {
+                    return PullResult { demand: Demand::NeedBytes(4), consumed: 0, events: Vec::new() };
+                }
+                self.emitted = true;
+                let events = vec![Event::Field(Field::Width(7))];
+                return PullResult { demand: Demand::Done, consumed: 4, events };
+            }
+            PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() }
+        }
+    }
+
+    #[test]
+    fn stream_does_not_finish_early_on_boundary_empty_window() {
+        // 首盒 4 字节 + 次盒 4 字节，逐字节喂入。
+        // 关键：当首盒 Skip 恰好用尽缓冲（边界空窗口）时，驱动必须等待更多字节，
+        // 而非用空窗口回调解析器导致 TwoBoxParser 提前 Done、漏掉次盒的 Width。
+        let bytes = [0u8; 8];
+        let chunks: Vec<&[u8]> = bytes.chunks(1).collect();
+        let col = run_stream(&chunks, alloc::boxed::Box::new(TwoBoxParser { skipped: false, emitted: false }));
+        assert_eq!(col.width, Some(7), "次盒的 Width 必须被读到（未被边界空窗口提前结束）");
+        assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
     }
 
     #[test]
