@@ -371,3 +371,73 @@ fn fixture_exif_subifd() -> Vec<u8> {
 fn differential_exif_subifd() {
     assert_all_equal(&fixture_exif_subifd());
 }
+
+fn make_tiff_gps_list() -> Vec<u8> {
+    // IFD0 → GPS sub-IFD(0x8825) → GPSLatitude(0x0002) RATIONAL cnt=3 → Value::List
+    let mut t: Vec<u8> = Vec::new();
+    t.extend_from_slice(b"II");
+    t.extend_from_slice(&42u16.to_le_bytes());
+    t.extend_from_slice(&8u32.to_le_bytes());
+    t.extend_from_slice(&1u16.to_le_bytes());
+    t.extend_from_slice(&0x8825u16.to_le_bytes());
+    t.extend_from_slice(&4u16.to_le_bytes());
+    t.extend_from_slice(&1u32.to_le_bytes());
+    t.extend_from_slice(&26u32.to_le_bytes());
+    t.extend_from_slice(&0u32.to_le_bytes());
+    t.extend_from_slice(&1u16.to_le_bytes());
+    t.extend_from_slice(&0x0002u16.to_le_bytes());
+    t.extend_from_slice(&5u16.to_le_bytes());
+    t.extend_from_slice(&3u32.to_le_bytes());
+    t.extend_from_slice(&44u32.to_le_bytes());
+    t.extend_from_slice(&0u32.to_le_bytes());
+    for n in [12u32, 34, 56] {
+        t.extend_from_slice(&n.to_le_bytes());
+        t.extend_from_slice(&1u32.to_le_bytes());
+    }
+    t
+}
+
+fn make_tiff_thumbnail() -> Vec<u8> {
+    // IFD0(Orientation=1) → next → IFD1/Thumbnail(Orientation=6)
+    let mut t: Vec<u8> = Vec::new();
+    t.extend_from_slice(b"II");
+    t.extend_from_slice(&42u16.to_le_bytes());
+    t.extend_from_slice(&8u32.to_le_bytes());
+    t.extend_from_slice(&1u16.to_le_bytes());
+    t.extend_from_slice(&0x0112u16.to_le_bytes());
+    t.extend_from_slice(&3u16.to_le_bytes());
+    t.extend_from_slice(&1u32.to_le_bytes());
+    t.extend_from_slice(&1u32.to_le_bytes());
+    t.extend_from_slice(&26u32.to_le_bytes()); // next = IFD1 @26
+    t.extend_from_slice(&1u16.to_le_bytes());
+    t.extend_from_slice(&0x0112u16.to_le_bytes());
+    t.extend_from_slice(&3u16.to_le_bytes());
+    t.extend_from_slice(&1u32.to_le_bytes());
+    t.extend_from_slice(&6u32.to_le_bytes());
+    t.extend_from_slice(&0u32.to_le_bytes());
+    t
+}
+
+fn wrap_jpeg_tiff(tiff: &[u8]) -> Vec<u8> {
+    let mut body: Vec<u8> = Vec::new();
+    body.extend_from_slice(b"Exif\0\0");
+    body.extend_from_slice(tiff);
+    let len = (body.len() + 2) as u16;
+    let mut j: Vec<u8> = Vec::new();
+    j.extend_from_slice(&[0xFF, 0xD8]);
+    j.extend_from_slice(&[0xFF, 0xE1]);
+    j.extend_from_slice(&len.to_be_bytes());
+    j.extend_from_slice(&body);
+    j.extend_from_slice(&[0xFF, 0xD9]);
+    j
+}
+
+#[test]
+fn differential_gps_list() {
+    assert_all_equal(&wrap_jpeg_tiff(&make_tiff_gps_list()));
+}
+
+#[test]
+fn differential_thumbnail_ifd() {
+    assert_all_equal(&wrap_jpeg_tiff(&make_tiff_thumbnail()));
+}

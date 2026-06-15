@@ -603,4 +603,14 @@ mod tests {
         assert_eq!(warns.len(), 1);
         assert_eq!(warns[0].kind, WarnKind::BadExifHeader);
     }
+
+    #[test]
+    fn absurd_count_drops_tag_without_panic() {
+        // RATIONAL(type 5, unit=8) with cnt near u32::MAX → cnt*8 overflows usize math
+        // path is guarded by checked_mul; tag dropped, no panic.
+        let t = tiff_one(0x829D, 5, 0xFFFF_FFFF, [0, 0, 0, 0], &[]);
+        let (out, warns) = decode_one(&t);
+        assert!(out.is_empty());
+        assert!(warns.is_empty());
+    }
 }
