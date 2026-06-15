@@ -7,6 +7,9 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileFormat {
     Jpeg,
+    Png,
+    Webp,
+    Gif,
     Unknown,
 }
 
@@ -46,6 +49,21 @@ pub enum Value {
     Text(String),
 }
 
+/// 容器原生字段（解析器直接从头部读出，不经 codec）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Field {
+    Width(u32),
+    Height(u32),
+}
+
+/// 一条 XMP 属性。prefix 为惯用前缀（如 "tiff"），原样保留，不解析命名空间 URI。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XmpProperty {
+    pub prefix: String,
+    pub name: String,
+    pub value: String,
+}
+
 /// 一条原始 EXIF 标签。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExifTag {
@@ -58,11 +76,14 @@ pub struct ExifTag {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RawTags {
     pub exif: Vec<ExifTag>,
+    pub xmp: Vec<XmpProperty>,
 }
 
 /// 统一规范层。全部 Option —— 缺失即 None，绝不臆造。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Unified {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
     pub orientation: Option<Orientation>,
     pub camera_make: Option<String>,
     pub camera_model: Option<String>,
@@ -74,8 +95,10 @@ pub enum WarnKind {
     BadExifHeader,
     UnreachableSection,
     /// 标签存在但取值超出规范范围（如 orientation 不在 1..=8），已丢弃。
-    /// 让调用者能区分“缺失”与“存在但无法识别”。
+    /// 让调用者能区分”缺失”与”存在但无法识别”。
     UnrecognizedValue,
+    /// 压缩块被跳过（本库零依赖、不解压）。
+    CompressedChunkSkipped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,5 +140,30 @@ mod tests {
         assert_eq!(u.orientation, None);
         assert_eq!(u.camera_make, None);
         assert_eq!(u.camera_model, None);
+    }
+
+    #[test]
+    fn unified_has_dimensions_defaulting_none() {
+        let u = Unified::default();
+        assert_eq!(u.width, None);
+        assert_eq!(u.height, None);
+    }
+
+    #[test]
+    fn rawtags_has_empty_xmp_by_default() {
+        let r = RawTags::default();
+        assert!(r.xmp.is_empty());
+    }
+
+    #[test]
+    fn field_and_xmp_property_construct() {
+        let f = Field::Width(1920);
+        assert_eq!(f, Field::Width(1920));
+        let p = XmpProperty {
+            prefix: String::from("tiff"),
+            name: String::from("Orientation"),
+            value: String::from("1"),
+        };
+        assert_eq!(p.name, "Orientation");
     }
 }

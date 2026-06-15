@@ -23,6 +23,12 @@ impl Collector {
             Event::Payload { kind: PayloadKind::Exif, data } => {
                 codecs::exif::decode(data, &mut self.exif, &mut self.warnings, &self.limits);
             }
+            Event::Payload { kind: PayloadKind::Xmp, data: _ } => {
+                // XMP dispatch wired in Task 3.
+            }
+            Event::Field(_) => {
+                // Field routing wired in Task 3.
+            }
             Event::Warning(w) => self.warnings.push(w),
         }
     }
@@ -42,7 +48,7 @@ pub enum Outcome {
 
 /// 收尾：把 Collector 投影为统一模型，组装 Metadata。read_slice 与 push 路径共用。
 pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
-    let raw = RawTags { exif: col.exif };
+    let raw = RawTags { exif: col.exif, xmp: Vec::new() };
     let mut warnings = col.warnings;
     let unified = normalize(&raw, &mut warnings);
     Metadata { unified, raw, warnings, format }

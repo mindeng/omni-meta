@@ -85,7 +85,7 @@ impl PushParser {
                 self.driver = Some(d);
                 Ok(outcome)
             }
-            FileFormat::Unknown => {
+            FileFormat::Unknown | FileFormat::Png | FileFormat::Webp | FileFormat::Gif => {
                 self.failed = true;
                 Err(Error::UnrecognizedFormat)
             }

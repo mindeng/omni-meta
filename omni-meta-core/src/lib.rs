@@ -24,6 +24,7 @@ pub use error::Error;
 pub use limits::Limits;
 pub use model::{
     ExifTag, FileFormat, Metadata, Orientation, RawTags, Unified, Value, WarnKind, Warning,
+    XmpProperty,
 };
 
 #[cfg(test)]

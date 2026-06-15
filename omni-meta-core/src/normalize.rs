@@ -48,6 +48,7 @@ mod tests {
                 ExifTag { ifd: 0, tag: 0x0110, value: Value::Text(String::from("X100")) },
                 ExifTag { ifd: 0, tag: 0x0112, value: Value::U16(6) },
             ]),
+            xmp: Vec::new(),
         };
         let mut warnings = Vec::new();
         let u = normalize(&raw, &mut warnings);
@@ -61,6 +62,7 @@ mod tests {
     fn unknown_orientation_value_is_dropped_with_warning() {
         let raw = RawTags {
             exif: Vec::from([ExifTag { ifd: 0, tag: 0x0112, value: Value::U16(99) }]),
+            xmp: Vec::new(),
         };
         let mut warnings = Vec::new();
         let u = normalize(&raw, &mut warnings);

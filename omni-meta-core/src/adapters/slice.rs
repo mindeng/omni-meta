@@ -21,6 +21,8 @@ pub fn read_slice(buf: &[u8], opts: Options) -> Result<Metadata, Error> {
             let col = drive_slice(buf, &mut parser, opts.limits);
             Ok(crate::driver::finalize(col, FileFormat::Jpeg))
         }
-        FileFormat::Unknown => Err(Error::UnrecognizedFormat),
+        FileFormat::Unknown | FileFormat::Png | FileFormat::Webp | FileFormat::Gif => {
+            Err(Error::UnrecognizedFormat)
+        }
     }
 }

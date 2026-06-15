@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use crate::model::Warning;
+use crate::model::{Field, Warning};
 
 // NeedBytes/Skip/SeekTo 是 sans-io 契约的一部分，由 driver 测试构造、
 // 并将由后续的流式/Push 适配器与多格式解析器构造；当前生产路径（JPEG 全缓冲）
@@ -20,19 +20,20 @@ pub enum Demand {
     Done,
 }
 
-/// 已定位的元数据载荷种类（本计划只有 Exif，后续加 Xmp/Iptc/Icc）。
+/// 已定位的元数据载荷种类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PayloadKind {
     Exif,
+    Xmp,
 }
 
 /// 解析过程中增量产出的事件。Payload 借用驱动缓冲，零拷贝。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event<'a> {
     Payload { kind: PayloadKind, data: &'a [u8] },
-    /// 解析器内联产出的警告。当前 codec 直接写 warnings 向量；
-    /// 该变体供后续容器级解析器在事件流中携带警告，暂未在生产路径构造。
+    /// 容器原生字段（width/height 等）。
     #[allow(dead_code)]
+    Field(Field),
     Warning(Warning),
 }
 
