@@ -25,7 +25,23 @@ pub fn probe(buf: &[u8]) -> FileFormat {
     if buf.len() >= 6 && (&buf[0..6] == b"GIF87a" || &buf[0..6] == b"GIF89a") {
         return FileFormat::Gif;
     }
+    // ISO-BMFF：偏移 4 处的 "ftyp" box，major brand 在 [8..12]。
+    if buf.len() >= 12 && &buf[4..8] == b"ftyp" {
+        return brand_to_format(&buf[8..12]);
+    }
     FileFormat::Unknown
+}
+
+/// 把 ftyp major brand 映射到 FileFormat。未知品牌但确为 ftyp → Mp4（ISO-BMFF 兜底）。
+fn brand_to_format(brand: &[u8]) -> FileFormat {
+    match brand {
+        b"avif" | b"avis" => FileFormat::Avif,
+        b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx" | b"mif1"
+        | b"msf1" => FileFormat::Heif,
+        b"qt  " => FileFormat::Mov,
+        // isom/iso2/mp41/mp42/M4V /M4A /dash/avc1… 及其余未知 ISO-BMFF
+        _ => FileFormat::Mp4,
+    }
 }
 
 /// 把已探测的格式映射到对应解析器。Unknown / 尚未实现的格式 → None。
@@ -84,5 +100,34 @@ mod tests {
         assert_eq!(probe(b"GIF89a\0\0\0\0\0\0\0"), FileFormat::Gif);
         assert_eq!(probe(b"GIF87a\0\0\0\0\0\0\0"), FileFormat::Gif);
         assert!(parser_for(FileFormat::Gif).is_some());
+    }
+
+    fn ftyp(major: &[u8; 4]) -> alloc::vec::Vec<u8> {
+        let mut b = alloc::vec::Vec::new();
+        b.extend_from_slice(&20u32.to_be_bytes()); // size
+        b.extend_from_slice(b"ftyp");
+        b.extend_from_slice(major);
+        b.extend_from_slice(&0u32.to_be_bytes());   // minor version
+        b.extend_from_slice(b"mif1");               // 一个兼容品牌
+        b
+    }
+
+    #[test]
+    fn detects_bmff_brands() {
+        assert_eq!(probe(&ftyp(b"heic")), FileFormat::Heif);
+        assert_eq!(probe(&ftyp(b"mif1")), FileFormat::Heif);
+        assert_eq!(probe(&ftyp(b"avif")), FileFormat::Avif);
+        assert_eq!(probe(&ftyp(b"qt  ")), FileFormat::Mov);
+        assert_eq!(probe(&ftyp(b"isom")), FileFormat::Mp4);
+        // 未知品牌但确为 ftyp → 归类 Mp4（ISO-BMFF 兜底）
+        assert_eq!(probe(&ftyp(b"zzzz")), FileFormat::Mp4);
+    }
+
+    #[test]
+    fn bmff_parsers_wired() {
+        assert!(parser_for(FileFormat::Heif).is_some());
+        assert!(parser_for(FileFormat::Avif).is_some());
+        assert!(parser_for(FileFormat::Mp4).is_some());
+        assert!(parser_for(FileFormat::Mov).is_some());
     }
 }
