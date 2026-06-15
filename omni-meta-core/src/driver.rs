@@ -30,8 +30,6 @@ impl Collector {
 
 /// 流式适配器与解析引擎之间的结果。`Need`/`SkipHint` 的数值都是"还需多少字节"
 /// / "还需向前跳多少字节"。
-// 目前仅被单测消费；Task 4 的 PushParser 起将成为非测试消费者。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     /// 需要再补至少 n 字节才能继续。
@@ -51,8 +49,6 @@ pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
 }
 
 /// 流式驱动：自有增长缓冲 + parser + Collector。被 PushParser/blocking/seek 复用。
-// 目前仅被单测消费；Task 4 的 PushParser 起将成为非测试消费者。
-#[allow(dead_code)]
 pub(crate) struct StreamDriver {
     buf: Vec<u8>,
     cursor: usize, // buf 内已消费偏移
@@ -65,7 +61,6 @@ pub(crate) struct StreamDriver {
     max_retained: usize,
 }
 
-#[allow(dead_code)]
 impl StreamDriver {
     pub(crate) fn new(parser: Box<dyn MetaParser>, limits: Limits) -> Self {
         let max_retained = limits.max_retained_bytes;

@@ -17,7 +17,9 @@ pub(crate) mod normalize;
 pub(crate) mod probe;
 pub(crate) mod driver;
 
+pub use adapters::push::PushParser;
 pub use adapters::slice::{read_slice, Options};
+pub use driver::Outcome;
 pub use error::Error;
 pub use limits::Limits;
 pub use model::{
