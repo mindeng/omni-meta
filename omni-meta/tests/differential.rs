@@ -56,6 +56,17 @@ fn fixture_large_nonmeta() -> Vec<u8> {
     wrap_jpeg(&app0, true, true)
 }
 
+/// APP0 段体 9000 字节，超过 read_seek 的 8192 字节读取块。
+/// 第一次 read() 只能消费 8192 字节，剩余跳过字节仍由驱动持有，
+/// 驱动因此向上层返回 SkipHint，触发 read_seek 的原生 seek 路径。
+fn fixture_huge_nonmeta() -> Vec<u8> {
+    let mut app0: Vec<u8> = Vec::new();
+    app0.extend_from_slice(&[0xFF, 0xE0]);
+    app0.extend_from_slice(&9002u16.to_be_bytes()); // length field = body(9000) + 2
+    app0.extend_from_slice(&[0u8; 9000]);
+    wrap_jpeg(&app0, true, true)
+}
+
 /// 截断在 APP1 段体中间（声明 len 远大于实际）。
 fn fixture_truncated() -> Vec<u8> {
     let mut j: Vec<u8> = Vec::new();
@@ -118,4 +129,11 @@ fn differential_truncated() {
 #[test]
 fn differential_unrecognized() {
     assert_all_equal(&[0x00, 0x01, 0x02, 0x03]);
+}
+
+#[test]
+fn differential_huge_nonmeta() {
+    // 段体 9000 字节 > 8192（read_seek 块大小），强制驱动在首次 read 后
+    // 返回 SkipHint，从而覆盖 read_seek 的原生 seek 分支。
+    assert_all_equal(&fixture_huge_nonmeta());
 }
