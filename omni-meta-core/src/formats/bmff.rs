@@ -114,6 +114,44 @@ fn read_u32_at(b: &[u8], off: usize) -> Option<u32> {
     Some(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
 }
 
+/// moov 解析产物。
+struct MoovInfo {
+    dims: Option<(u32, u32)>,
+    duration_ms: Option<u64>,
+    created: Option<DateTimeParts>,
+    warnings: Vec<Warning>,
+}
+
+/// 解析 `moov` 载荷：mvhd → 时长/创建时间；逐 trak → tkhd 取首个非零维度。
+/// `moov_abs_base` 仅用于警告偏移保真。深度 2 显式迭代，非递归。
+fn parse_moov(moov_payload: &[u8], moov_abs_base: u64) -> MoovInfo {
+    let mut info = MoovInfo { dims: None, duration_ms: None, created: None, warnings: Vec::new() };
+    for (hdr, p) in iter_child_boxes(moov_payload) {
+        match &hdr.kind {
+            b"mvhd" => {
+                let m = parse_mvhd(p);
+                info.duration_ms = m.duration_ms;
+                info.created = m.created;
+                if m.timescale_invalid {
+                    info.warnings.push(Warning { offset: moov_abs_base, kind: WarnKind::UnrecognizedValue });
+                }
+            }
+            b"trak" if info.dims.is_none() => {
+                for (thdr, tp) in iter_child_boxes(p) {
+                    if &thdr.kind == b"tkhd"
+                        && let Some(d) = parse_tkhd(tp)
+                    {
+                        info.dims = Some(d);
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    info
+}
+
 /// 我们关心的一个 item（EXIF 或 XMP）及其 ID。
 struct Wanted {
     id: u32,
@@ -1115,6 +1153,44 @@ mod tests {
     #[test]
     fn parse_tkhd_truncated_is_none() {
         assert_eq!(parse_tkhd(&[0u8, 0, 0, 0, 1, 2]), None);
+    }
+
+    /// trak{ tkhd }。
+    fn trak(tkhd_payload: &[u8]) -> Vec<u8> {
+        box_bytes(b"trak", &box_bytes(b"tkhd", tkhd_payload))
+    }
+
+    #[test]
+    fn parse_moov_picks_video_track_and_time() {
+        // moov{ mvhd, trak(audio 0×0), trak(video 1920×1080) }
+        let mut moov_p = Vec::new();
+        moov_p.extend_from_slice(&box_bytes(b"mvhd", &mvhd_v0(2_082_844_800, 600, 900_900)));
+        moov_p.extend_from_slice(&trak(&tkhd_v0(0, 0)));        // 音频轨先出现
+        moov_p.extend_from_slice(&trak(&tkhd_v0(1920, 1080)));  // 视频轨
+        let info = parse_moov(&moov_p, 0);
+        assert_eq!(info.dims, Some((1920, 1080))); // 跳过 0×0，选视频
+        assert_eq!(info.duration_ms, Some(1_501_500));
+        assert_eq!(info.created.map(|d| d.year), Some(1970));
+        assert!(info.warnings.is_empty());
+    }
+
+    #[test]
+    fn parse_moov_timescale_zero_warns() {
+        let mut moov_p = Vec::new();
+        moov_p.extend_from_slice(&box_bytes(b"mvhd", &mvhd_v0(0, 0, 1000)));
+        let info = parse_moov(&moov_p, 0);
+        assert_eq!(info.duration_ms, None);
+        assert_eq!(info.warnings.len(), 1);
+        assert_eq!(info.warnings[0].kind, WarnKind::UnrecognizedValue);
+    }
+
+    #[test]
+    fn parse_moov_no_mvhd_no_trak_is_empty() {
+        let info = parse_moov(&box_bytes(b"free", &[0u8; 4]), 0);
+        assert_eq!(info.dims, None);
+        assert_eq!(info.duration_ms, None);
+        assert_eq!(info.created, None);
+        assert!(info.warnings.is_empty());
     }
 
     #[test]
