@@ -71,6 +71,12 @@ impl MetaParser for JpegParser {
                     pos += after;
                     continue;
                 }
+                0x00 => {
+                    // 字节填充（0xFF 0x00）出现在标记区属畸形；best-effort 停止，
+                    // 不尝试把后续字节解释为长度（否则产生虚假巨型 Skip）。
+                    self.done = true;
+                    return PullResult { demand: Demand::Done, consumed: pos, events };
+                }
                 _ => {
                     if rest.len() < after + 2 {
                         return PullResult { demand: Demand::NeedBytes(after + 2), consumed: pos, events };
@@ -236,6 +242,24 @@ mod tests {
         assert!(res.events.is_empty());
     }
 
+    /// 标记区字节填充（0xFF 0x00）→ 干净 Done，drive_slice 无警告。
+    #[test]
+    fn marker_stuffing_in_segment_region_stops_cleanly() {
+        use crate::driver::drive_slice;
+        use crate::limits::Limits;
+        // SOI + 0xFF 0x00（非法标记区填充）+ 更多字节（应被忽略）
+        let j = [0xFFu8, 0xD8, 0xFF, 0x00, 0xAA, 0xBB, 0xCC];
+        let mut p = JpegParser::new();
+        // (a) 解析器直接返回 Done
+        let res = p.pull(&j);
+        assert_eq!(res.demand, Demand::Done);
+        assert!(res.events.is_empty());
+        // (b) 通过 drive_slice 跑：无警告（停止干净，不触发 UnreachableSection）
+        let mut p2 = JpegParser::new();
+        let col = drive_slice(&j, &mut p2, Limits::default());
+        assert!(col.warnings.is_empty(), "expected no warnings, got: {:?}", col.warnings);
+    }
+
     /// 截断在 APP1 段体中间：窗口不足应发 NeedBytes 而非静默 Done。
     #[test]
     fn truncated_app1_requests_more_bytes() {
@@ -292,9 +316,9 @@ mod tests {
         // pull #1：到 APP0 段头 → Skip(6)
         let r1 = p.pull(&j);
         assert_eq!(r1.demand, Demand::Skip(6));
-        let mut pos = r1.consumed + 6; // 模拟 driver 跳过段体
+        let _pos = r1.consumed + 6; // 模拟 driver 跳过段体
         // pull #2：APP1 → payload，随后 EOI → Done
-        let r2 = p.pull(&j[pos..]);
+        let r2 = p.pull(&j[_pos..]);
         assert_eq!(r2.demand, Demand::Done);
         assert_eq!(r2.events.len(), 1);
         match &r2.events[0] {
@@ -304,6 +328,5 @@ mod tests {
             }
             _ => panic!("expected payload"),
         }
-        let _ = &mut pos;
     }
 }

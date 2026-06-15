@@ -55,6 +55,9 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
                 // 截断点 = 解析器卡住的绝对位置（slice 永不丢弃前缀 → start 即绝对）。
                 let stuck = start.saturating_add(res.consumed);
                 let avail = buf.len().saturating_sub(stuck);
+                // `stuck > start`（即 consumed > 0）是零前进守卫：
+                // 在全量 slice 上，契约合规的解析器只在窗口确实不足时返回 NeedBytes；
+                // 若 consumed==0 却已有足够字节，说明解析器行为异常，停止以防自旋。
                 if avail >= n && stuck > start {
                     // 已有足够字节且有推进 → 续跑（增量 parser 的正常路径）。
                     pos = stuck;
