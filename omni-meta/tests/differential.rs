@@ -622,3 +622,66 @@ fn differential_bmff_mp4() {
 fn differential_bmff_mp4_moov_after_mdat() {
     assert_all_equal(&fixture_bmff_mp4_moov_after_mdat());
 }
+
+fn mp4_mvhd_v1(creation: u64, timescale: u32, duration: u64) -> Vec<u8> {
+    let mut p = vec![1u8, 0, 0, 0]; // version 1, flags 0
+    p.extend_from_slice(&creation.to_be_bytes());
+    p.extend_from_slice(&0u64.to_be_bytes()); // modification_time
+    p.extend_from_slice(&timescale.to_be_bytes());
+    p.extend_from_slice(&duration.to_be_bytes());
+    p
+}
+
+fn fixture_bmff_mp4_v1() -> Vec<u8> {
+    let mut ftyp_p = Vec::new();
+    ftyp_p.extend_from_slice(b"isom");
+    ftyp_p.extend_from_slice(&0u32.to_be_bytes());
+    ftyp_p.extend_from_slice(b"mp42");
+    let ftyp = bmff_box(b"ftyp", &ftyp_p);
+
+    let mut moov_p = Vec::new();
+    // creation 2_082_844_800 → 1970-01-01; timescale 1000, duration 5000 → 5000 ms
+    moov_p.extend_from_slice(&bmff_box(b"mvhd", &mp4_mvhd_v1(2_082_844_800, 1000, 5000)));
+    moov_p.extend_from_slice(&bmff_box(b"trak", &bmff_box(b"tkhd", &mp4_tkhd_v0(1280, 720))));
+    let moov = bmff_box(b"moov", &moov_p);
+
+    let mut f = Vec::new();
+    f.extend_from_slice(&ftyp);
+    f.extend_from_slice(&moov);
+    f
+}
+
+#[test]
+fn differential_bmff_mp4_v1_mvhd() {
+    assert_all_equal(&fixture_bmff_mp4_v1());
+}
+
+fn make_tiff_datetime_original() -> Vec<u8> {
+    // little-endian TIFF; IFD0 @8 → ExifIFDPointer; Exif sub-IFD @26 → DateTimeOriginal @44
+    let mut t: Vec<u8> = Vec::new();
+    t.extend_from_slice(b"II");
+    t.extend_from_slice(&42u16.to_le_bytes());
+    t.extend_from_slice(&8u32.to_le_bytes());
+    // IFD0 @8: 1 entry (ExifIFDPointer)
+    t.extend_from_slice(&1u16.to_le_bytes());
+    t.extend_from_slice(&0x8769u16.to_le_bytes()); // ExifIFDPointer
+    t.extend_from_slice(&4u16.to_le_bytes());      // LONG
+    t.extend_from_slice(&1u32.to_le_bytes());      // count
+    t.extend_from_slice(&26u32.to_le_bytes());     // → Exif sub-IFD @26
+    t.extend_from_slice(&0u32.to_le_bytes());      // next IFD = 0
+    // Exif sub-IFD @26: 1 entry (DateTimeOriginal)
+    t.extend_from_slice(&1u16.to_le_bytes());
+    t.extend_from_slice(&0x9003u16.to_le_bytes()); // DateTimeOriginal
+    t.extend_from_slice(&2u16.to_le_bytes());      // ASCII
+    t.extend_from_slice(&20u32.to_le_bytes());     // count = 19 chars + NUL
+    t.extend_from_slice(&44u32.to_le_bytes());     // value offset @44
+    t.extend_from_slice(&0u32.to_le_bytes());      // next IFD = 0
+    // @44: the string
+    t.extend_from_slice(b"2003:01:24 09:20:00\0");
+    t
+}
+
+#[test]
+fn differential_jpeg_exif_created() {
+    assert_all_equal(&wrap_jpeg_tiff(&make_tiff_datetime_original()));
+}
