@@ -815,6 +815,74 @@ mod tests {
         assert_eq!(meta.unified.created.map(|d| d.year), Some(2018));
     }
 
+    /// 同时给出 EXIF DateTimeOriginal 与容器 Created：finalize 中容器值须覆盖 EXIF 派生值。
+    struct ExifPlusContainerCreatedEmitter;
+    impl MetaParser for ExifPlusContainerCreatedEmitter {
+        fn pull<'a>(&mut self, _input: &'a [u8]) -> crate::demand::PullResult<'a> {
+            use crate::demand::{PayloadKind, PullResult};
+            // 最小 TIFF：Exif sub-IFD(0x8769) → DateTimeOriginal(0x9003)="2003:01:24 09:20:00"
+            let events = vec![
+                Event::Payload { kind: PayloadKind::Exif, data: TIFF_WITH_DTO },
+                Event::Field(Field::Created(DateTimeParts {
+                    year: 2018, month: 6, day: 15, hour: 0, minute: 0, second: 0, tz_offset_min: Some(0),
+                })),
+            ];
+            PullResult { demand: Demand::Done, consumed: 0, events }
+        }
+    }
+
+    /// 静态 TIFF 字节：II + IFD0(ExifIFDPointer 0x8769 → @26) + Exif IFD(@26)(DateTimeOriginal 0x9003 ASCII cnt=20 → @44)
+    /// + "2003:01:24 09:20:00\0"@44。小端布局，使 raw.exif 含 ifd=Exif, tag=0x9003, value=Text("2003:01:24 09:20:00")。
+    ///
+    /// 布局：
+    ///  @0  II,42,IFD0@8
+    ///  @8  IFD0 count=1 | entry: 0x8769 LONG cnt=1 val=26(→Exif IFD) | next=0
+    ///  @26 Exif IFD count=1 | entry: 0x9003 ASCII cnt=20 val_offset=44 | next=0
+    ///  @44 "2003:01:24 09:20:00\0"
+    static TIFF_WITH_DTO: &[u8] = &[
+        // @0 TIFF header: II, magic=42, IFD0 offset=8
+        b'I', b'I',
+        42, 0,           // magic u16 LE
+        8, 0, 0, 0,      // IFD0 offset u32 LE
+        // @8 IFD0: count=1
+        1, 0,
+        // entry: tag=0x8769, type=4(LONG), count=1, value=26
+        0x69, 0x87,      // tag 0x8769 LE
+        4, 0,            // type LONG
+        1, 0, 0, 0,      // count=1
+        26, 0, 0, 0,     // offset to Exif IFD = 26
+        // @22 IFD0 next=0
+        0, 0, 0, 0,
+        // @26 Exif IFD: count=1
+        1, 0,
+        // entry: tag=0x9003, type=2(ASCII), count=20, offset=44
+        0x03, 0x90,      // tag 0x9003 LE
+        2, 0,            // type ASCII
+        20, 0, 0, 0,     // count=20 (19 chars + NUL)
+        44, 0, 0, 0,     // offset to string data = 44
+        // @40 Exif IFD next=0
+        0, 0, 0, 0,
+        // @44 "2003:01:24 09:20:00\0"
+        b'2', b'0', b'0', b'3', b':',
+        b'0', b'1', b':',
+        b'2', b'4', b' ',
+        b'0', b'9', b':',
+        b'2', b'0', b':',
+        b'0', b'0', 0,
+    ];
+
+    #[test]
+    fn container_created_beats_exif_derived() {
+        let buf = [0u8; 4];
+        let mut p = ExifPlusContainerCreatedEmitter;
+        let col = drive_slice(&buf, &mut p, Limits::default());
+        let meta = finalize(col, FileFormat::Mp4);
+        // 先确认 EXIF 路径确实产出了 created（否则测试无意义）
+        assert!(meta.raw.exif.iter().any(|t| t.tag == 0x9003), "EXIF DateTimeOriginal 应被解码");
+        // 容器值（2018）覆盖 EXIF 派生值（2003）
+        assert_eq!(meta.unified.created.map(|d| d.year), Some(2018));
+    }
+
     fn make_tiff() -> Vec<u8> {
         let mut t: Vec<u8> = Vec::new();
         t.extend_from_slice(b"II");
