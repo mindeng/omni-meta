@@ -1,6 +1,6 @@
 # omni-meta Roadmap
 
-**活文档** · 最近更新 2026-06-15（A1+A2 完成）· 维护者随进度勾选
+**活文档** · 最近更新 2026-06-15（A1+A2+A3 完成）· 维护者随进度勾选
 基准设计：[`docs/superpowers/specs/2026-06-14-omni-meta-design.md`](superpowers/specs/2026-06-14-omni-meta-design.md)
 
 > 本文档替代原设计 §11 的线性 phase 表——实际推进中适配器被提前完成、各纵切片
@@ -28,19 +28,23 @@
 | normalize | raw→Unified 投影（仅 Primary IFD）、容器维度优先、XMP 回退 | `d7d279f` `619df68` |
 | **容器：ISO-BMFF (A1)** | `read_box_header`/`full_box_vf`/`iter_child_boxes` box 结构层（显式迭代、边界安全）；`ftyp` brand→`FileFormat::{Heif,Avif,Mp4,Mov}` 探测 | `e1bc699` `8682600` |
 | **格式：HEIF/AVIF (A2)** | `meta` 下钻 `iinf`/`iloc`→EXIF/XMP item（construction_method 0=mdat 绝对偏移 SeekTo / 1=idat 内联）、`ispe` 维度（`pitm`/`ipma` + 单 ispe 兜底），复用现有 EXIF/XMP codec；method2/越界/截断→警告不 panic | `d8cd745` |
+| **格式：MP4/MOV (A3)** | `moov` 整盒入窗解析：`mvhd`→`duration_ms`（duration/timescale→ms，u128 防溢出）/`created`（1904 UTC 秒→`DateTimeParts`），逐 `trak`/`tkhd`→维度（16.16 定点取整，首个非零轨胜出）；`created` 增 EXIF 第二来源（DateTimeOriginal/DateTime + OffsetTime 解析）；`timescale=0`/溢出/`creation=0`/截断/嵌套越界均警告或干净缺失、不 panic | `58b5e06`…`eec7f44` |
 | **适配器（4 条）** | `read_slice` / `push` / `read_blocking` / `read_seek` | — |
 | 测试基座 | 四适配器差分一致性（含完整 HEIC meta+mdat 的 SeekTo 抽取）+ 各 codec/格式单测 | `535fb90` `d4f5b42` `d4dccd4` |
 
 ### 当前 Unified 字段
 
-`width` · `height` · `orientation` · `camera_make` · `camera_model`（均 `Option`）
+`width` · `height` · `orientation` · `camera_make` · `camera_model` · `duration_ms` · `created`（均 `Option`）
 > 受控增长原则：每个新字段需 **≥2 种格式来源**才纳入。
 > A2 起 `width`/`height` 增 HEIF/AVIF `ispe` 来源（第 5 个格式来源）。
+> A3 起新增 `created`（BMFF moov 1904 UTC + EXIF DateTimeOriginal/DateTime，≥2 来源满足；`DateTimeParts`
+> 带可选时区：moov=`Some(0)` UTC，EXIF 无 OffsetTime 时 `None`）与 `duration_ms`（BMFF moov，毫秒；
+> 第二来源待 EBML 里程碑 C 补齐）。
 
 ### 尚未开始 ⬜
 
-IPTC codec · ICC 摘要 · **ISO-BMFF MP4/MOV `moov`（维度/时长/创建时间 = A3；HEIF/AVIF meta 已完成）** ·
-EBML 容器（MKV/WebM）· TIFF 顶层格式 · async/tokio 适配器 · Stripper（剥离）· 时间/GPS/时长等 Unified 字段扩展
+IPTC codec · ICC 摘要 · EBML 容器（MKV/WebM，复用 `duration_ms`/`created`，补 `duration_ms` 第二来源） ·
+TIFF 顶层格式 · async/tokio 适配器 · Stripper（剥离）· GPS 等 Unified 字段扩展 · `cargo-fuzz`（横切，各容器/codec）
 
 ---
 
@@ -92,10 +96,10 @@ EBML 容器（MKV/WebM）· TIFF 顶层格式 · async/tokio 适配器 · Stripp
 - [x] 两阶段 `BmffParser`（Walk 找 meta → Extract `SeekTo` 抽取）+ 两处 Driver 守卫修复（空窗口=EOF、相邻零间隔 SeekTo）
 - [x] 四适配器差分（完整 HEIC meta+mdat）+ 截断/越界/method2 警告路径单测
 
-**A3（MP4/MOV moov，⬜ 下一站）**
-- [ ] MP4/MOV：`moov` 维度 + 时长 + 创建时间 → `Event::Field`（`tkhd`/`mvhd`）
-- [ ] 新增 Unified 字段评估：`duration`（视频）、`created`（BMFF moov + EXIF 两来源，满足 ≥2）+ 时间归一（EXIF 本地无时区 vs BMFF 1904 UTC 秒）
-- [ ] box 嵌套/截断/越界 fuzz 样本（`cargo-fuzz`）
+**A3（MP4/MOV moov，✅ 完成）** — 设计 `specs/2026-06-15-omni-meta-bmff-moov-design.md` / 计划 `plans/2026-06-15-omni-meta-bmff-moov.md`
+- [x] MP4/MOV：`moov` 维度（`tkhd` 16.16 定点）+ 时长（`mvhd` duration/timescale→ms）+ 创建时间（`mvhd` 1904 UTC）→ `Event::Field`
+- [x] 新增 Unified 字段：`duration_ms`（BMFF moov；EBML 里程碑 C 补第二来源）、`created`（BMFF moov + EXIF ≥2 满足）；`DateTimeParts` 带可选时区化解「EXIF 本地无时区 vs BMFF 1904 UTC 秒」（moov=`Some(0)`、EXIF=`None` 或 OffsetTime 解析值）
+- [x] box 嵌套/截断/越界 **合成畸形单测**（截断 moov、mvhd 溢出、嵌套越界、`timescale=0`、声明 size 超界 → 永不 panic / 不超 `Limits`）；`cargo-fuzz` 作为独立横切里程碑另立（见 §4）
 
 ### 里程碑 B — IPTC-IIM codec（可提前，见 §2）
 
@@ -131,7 +135,7 @@ EBML 容器（MKV/WebM）· TIFF 顶层格式 · async/tokio 适配器 · Stripp
 
 ## 4. 横切待办（贯穿各里程碑）
 
-- [ ] **Unified 受控增长**：`created` / `gps` / `duration` / `video_codec` / `audio_codec` 等随来源达到 ≥2 时纳入
+- [ ] **Unified 受控增长**：`created`（A3 已纳入，BMFF+EXIF）/ `duration_ms`（A3 纳入，单来源 BMFF，待 EBML 补 ≥2）/ `gps` / `video_codec` / `audio_codec` 等随来源达到 ≥2 时纳入
 - [ ] **`Value` 枚举**：按需补 `U64`/`I64` 等（当前为 v1 子集）
 - [ ] **fuzz**：每个新容器/codec 接 `cargo-fuzz`，断言永不 panic / 不超 `Limits` / 不死循环
 - [ ] **no_std CI**：每个里程碑验证 `--no-default-features`
