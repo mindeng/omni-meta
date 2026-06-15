@@ -271,3 +271,30 @@ fn fixture_webp_vp8l() -> Vec<u8> {
 fn differential_webp_vp8l() {
     assert_all_equal(&fixture_webp_vp8l());
 }
+
+fn fixture_gif() -> Vec<u8> {
+    let mut g = Vec::new();
+    g.extend_from_slice(b"GIF89a");
+    g.extend_from_slice(&800u16.to_le_bytes());
+    g.extend_from_slice(&600u16.to_le_bytes());
+    g.push(0x00); // 无 GCT
+    g.push(0);
+    g.push(0);
+    // XMP Application Extension
+    g.push(0x21);
+    g.push(0xFF);
+    g.push(0x0B);
+    g.extend_from_slice(b"XMP DataXMP");
+    g.extend_from_slice(br#"<rdf:Description tiff:Make="Acme"/>"#);
+    g.push(0x01);
+    for v in (0u8..=0xFFu8).rev() {
+        g.push(v);
+    }
+    g.push(0x3B); // trailer
+    g
+}
+
+#[test]
+fn differential_gif() {
+    assert_all_equal(&fixture_gif());
+}

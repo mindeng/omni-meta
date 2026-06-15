@@ -20,6 +20,9 @@ pub fn probe(buf: &[u8]) -> FileFormat {
     if buf.len() >= 12 && &buf[0..4] == b"RIFF" && &buf[8..12] == b"WEBP" {
         return FileFormat::Webp;
     }
+    if buf.len() >= 6 && (&buf[0..6] == b"GIF87a" || &buf[0..6] == b"GIF89a") {
+        return FileFormat::Gif;
+    }
     FileFormat::Unknown
 }
 
@@ -29,6 +32,7 @@ pub(crate) fn parser_for(fmt: FileFormat) -> Option<Box<dyn MetaParser>> {
         FileFormat::Jpeg => Some(Box::new(crate::formats::jpeg::JpegParser::new())),
         FileFormat::Png => Some(Box::new(crate::formats::png::PngParser::new())),
         FileFormat::Webp => Some(Box::new(crate::formats::webp::WebpParser::new())),
+        FileFormat::Gif => Some(Box::new(crate::formats::gif::GifParser::new())),
         _ => None,
     }
 }
@@ -76,5 +80,12 @@ mod tests {
         b.extend_from_slice(b"WEBP");
         assert_eq!(probe(&b), FileFormat::Webp);
         assert!(parser_for(FileFormat::Webp).is_some());
+    }
+
+    #[test]
+    fn detects_gif_signature() {
+        assert_eq!(probe(b"GIF89a\0\0\0\0\0\0\0"), FileFormat::Gif);
+        assert_eq!(probe(b"GIF87a\0\0\0\0\0\0\0"), FileFormat::Gif);
+        assert!(parser_for(FileFormat::Gif).is_some());
     }
 }
