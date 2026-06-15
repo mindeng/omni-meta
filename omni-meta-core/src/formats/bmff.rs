@@ -43,6 +43,54 @@ fn datetime_from_mp4_epoch(secs: u64) -> DateTimeParts {
     }
 }
 
+/// mvhd 解析产物。`timescale_invalid` 标记 timescale==0 或时长溢出，供上层发警告。
+#[derive(Default)]
+struct Mvhd {
+    duration_ms: Option<u64>,
+    created: Option<DateTimeParts>,
+    timescale_invalid: bool,
+}
+
+/// 解析 `mvhd`（MovieHeaderBox）载荷 → 时长 + 创建时间。
+fn parse_mvhd(payload: &[u8]) -> Mvhd {
+    let mut out = Mvhd::default();
+    let (version, _flags) = match full_box_vf(payload) {
+        Some(v) => v,
+        None => return out,
+    };
+    let mut cur = ByteCursor::new(payload);
+    if cur.seek(4).is_none() {
+        return out;
+    }
+    let (creation, timescale, duration) = if version == 1 {
+        let creation = match read_uint_be(&mut cur, 8) { Some(v) => v, None => return out };
+        if read_uint_be(&mut cur, 8).is_none() { return out; } // modification_time
+        let timescale = match cur.u32(Endian::Big) { Some(v) => v, None => return out };
+        let duration = match read_uint_be(&mut cur, 8) { Some(v) => v, None => return out };
+        (creation, timescale, duration)
+    } else {
+        let creation = match cur.u32(Endian::Big) { Some(v) => u64::from(v), None => return out };
+        if cur.u32(Endian::Big).is_none() { return out; } // modification_time
+        let timescale = match cur.u32(Endian::Big) { Some(v) => v, None => return out };
+        let duration = match cur.u32(Endian::Big) { Some(v) => u64::from(v), None => return out };
+        (creation, timescale, duration)
+    };
+    // duration_ms = duration * 1000 / timescale（u128 中间量防溢出）。
+    if timescale == 0 {
+        out.timescale_invalid = true;
+    } else {
+        let ms = u128::from(duration) * 1000 / u128::from(timescale);
+        match u64::try_from(ms) {
+            Ok(v) => out.duration_ms = Some(v),
+            Err(_) => out.timescale_invalid = true, // 溢出当作无效，发警告、不臆造
+        }
+    }
+    if creation != 0 {
+        out.created = Some(datetime_from_mp4_epoch(creation));
+    }
+    out
+}
+
 /// 我们关心的一个 item（EXIF 或 XMP）及其 ID。
 struct Wanted {
     id: u32,
@@ -927,6 +975,63 @@ mod tests {
         assert!(meta.raw.xmp.iter().any(|x| x.name == "Make" && x.value == "Acme"));
         assert_eq!(meta.unified.camera_make.as_deref(), Some("Acme"),
             "unified.camera_make 须经 normalize 从 EXIF IFD0 Make 投影");
+    }
+
+    /// 构造 mvhd 载荷（box 头之后的字节），version 0。
+    fn mvhd_v0(creation: u32, timescale: u32, duration: u32) -> Vec<u8> {
+        let mut p = alloc::vec![0u8, 0, 0, 0]; // version 0, flags 0
+        p.extend_from_slice(&creation.to_be_bytes());
+        p.extend_from_slice(&0u32.to_be_bytes()); // modification_time
+        p.extend_from_slice(&timescale.to_be_bytes());
+        p.extend_from_slice(&duration.to_be_bytes());
+        p
+    }
+
+    fn mvhd_v1(creation: u64, timescale: u32, duration: u64) -> Vec<u8> {
+        let mut p = alloc::vec![1u8, 0, 0, 0]; // version 1
+        p.extend_from_slice(&creation.to_be_bytes());
+        p.extend_from_slice(&0u64.to_be_bytes()); // modification_time
+        p.extend_from_slice(&timescale.to_be_bytes());
+        p.extend_from_slice(&duration.to_be_bytes());
+        p
+    }
+
+    #[test]
+    fn parse_mvhd_v0_duration_and_created() {
+        // timescale 600, duration 900900 → 900900*1000/600 = 1_501_500 ms
+        // creation 2_082_844_800 → 1970-01-01
+        let m = parse_mvhd(&mvhd_v0(2_082_844_800, 600, 900_900));
+        assert_eq!(m.duration_ms, Some(1_501_500));
+        assert_eq!(m.created.map(|d| d.year), Some(1970));
+        assert!(!m.timescale_invalid);
+    }
+
+    #[test]
+    fn parse_mvhd_v1_wide_fields() {
+        let m = parse_mvhd(&mvhd_v1(2_082_844_800, 1000, 5000));
+        assert_eq!(m.duration_ms, Some(5000));
+        assert_eq!(m.created.map(|d| d.year), Some(1970));
+    }
+
+    #[test]
+    fn parse_mvhd_timescale_zero_no_duration() {
+        let m = parse_mvhd(&mvhd_v0(0, 0, 1000));
+        assert_eq!(m.duration_ms, None);
+        assert!(m.timescale_invalid);
+    }
+
+    #[test]
+    fn parse_mvhd_creation_zero_no_created() {
+        let m = parse_mvhd(&mvhd_v0(0, 600, 600));
+        assert_eq!(m.created, None); // creation_time==0 视作未设置
+        assert_eq!(m.duration_ms, Some(1000));
+    }
+
+    #[test]
+    fn parse_mvhd_truncated_is_none() {
+        let m = parse_mvhd(&[0u8, 0, 0]); // 不足 FullBox 头
+        assert_eq!(m.duration_ms, None);
+        assert_eq!(m.created, None);
     }
 
     #[test]
