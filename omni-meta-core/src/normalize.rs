@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use crate::model::{Orientation, RawTags, Unified, Value, WarnKind, Warning};
+use crate::model::{IfdKind, Orientation, RawTags, Unified, Value, WarnKind, Warning};
 
 const TAG_MAKE: u16 = 0x010F;
 const TAG_MODEL: u16 = 0x0110;
@@ -17,6 +17,9 @@ const TAG_ORIENTATION: u16 = 0x0112;
 pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
     let mut u = Unified::default();
     for t in &raw.exif {
+        if t.ifd != IfdKind::Primary {
+            continue;
+        }
         match (t.tag, &t.value) {
             (TAG_MAKE, Value::Text(s)) => u.camera_make = Some(s.clone()),
             (TAG_MODEL, Value::Text(s)) => u.camera_model = Some(s.clone()),
@@ -142,5 +145,22 @@ mod tests {
         let mut warnings = Vec::new();
         let u = normalize(&raw, &mut warnings);
         assert_eq!(u.camera_make.as_deref(), Some("ExifMake"));
+    }
+
+    #[test]
+    fn thumbnail_ifd_does_not_pollute_unified() {
+        // IFD0 Orientation=Normal(1),IFD1(Thumbnail) Orientation=Rotate90(6)。
+        // Unified.orientation 必须只反映 IFD0。
+        let raw = RawTags {
+            exif: Vec::from([
+                ExifTag { ifd: IfdKind::Primary, tag: 0x0112, value: Value::U16(1) },
+                ExifTag { ifd: IfdKind::Thumbnail, tag: 0x0112, value: Value::U16(6) },
+            ]),
+            xmp: Vec::new(),
+        };
+        let mut warnings = Vec::new();
+        let u = normalize(&raw, &mut warnings);
+        assert_eq!(u.orientation, Some(Orientation::Normal));
+        assert!(warnings.is_empty(), "warnings: {:?}", warnings);
     }
 }
