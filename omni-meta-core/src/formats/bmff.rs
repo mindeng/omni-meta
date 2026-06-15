@@ -744,6 +744,18 @@ mod tests {
     }
 
     #[test]
+    fn drive_truncated_meta_warns_truncated() {
+        // meta 声明 size=200，但实际只有 20 字节 → 解析器索要 200 字节，driver 到 EOF 记 Truncated。
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&200u32.to_be_bytes()); // size=200
+        buf.extend_from_slice(b"meta");
+        buf.extend_from_slice(&[0u8; 12]); // 仅 12 字节载荷（合计 20 < 200）
+        let col = crate::driver::drive_slice(&buf, &mut BmffParser::new(), crate::limits::Limits::default());
+        assert_eq!(col.warnings.len(), 1);
+        assert_eq!(col.warnings[0].kind, WarnKind::Truncated);
+    }
+
+    #[test]
     fn parse_meta_method2_warns_and_skips() {
         // iinf: Exif item id=1；iloc version1 method=2（item 间接引用，不支持）
         let mut iinf_p = alloc::vec![0u8, 0, 0, 0];
