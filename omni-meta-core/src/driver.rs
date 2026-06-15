@@ -374,6 +374,7 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
 mod tests {
     use super::*;
     use crate::demand::PullResult;
+    use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
 
@@ -598,13 +599,10 @@ mod tests {
     use crate::demand::PayloadKind;
 
     /// 一次性发出 Width/Height Field + 一个 XMP 载荷后 Done 的假解析器。
-    struct FieldXmpEmitter {
-        done: bool,
-    }
+    struct FieldXmpEmitter;
     impl MetaParser for FieldXmpEmitter {
         fn pull<'a>(&mut self, input: &'a [u8]) -> crate::demand::PullResult<'a> {
             use crate::demand::PullResult;
-            self.done = true;
             let events = vec![
                 Event::Field(Field::Width(1920)),
                 Event::Field(Field::Height(1080)),
@@ -619,9 +617,8 @@ mod tests {
 
     #[test]
     fn collector_records_fields_and_xmp() {
-        use alloc::string::String;
         let buf = [0u8; 4];
-        let mut p = FieldXmpEmitter { done: false };
+        let mut p = FieldXmpEmitter;
         let col = drive_slice(&buf, &mut p, Limits::default());
         let meta = finalize(col, FileFormat::Png);
         assert_eq!(meta.unified.width, Some(1920));
