@@ -89,6 +89,113 @@ fn parse_iinf(payload: &[u8]) -> Vec<Wanted> {
     out
 }
 
+/// 一条 item 定位（仅保留首个 extent；多 extent 在装配时按警告跳过）。
+struct Loc {
+    id: u32,
+    method: u8,
+    extent_count: u16,
+    /// 首个 extent：(偏移, 长度)。method 0 为绝对文件偏移；method 1 为 idat 内相对偏移。
+    first_extent: Option<(u64, u64)>,
+}
+
+/// 解析 `iloc`（ItemLocationBox）载荷 → 各 item 定位。
+fn parse_iloc(payload: &[u8]) -> Vec<Loc> {
+    let mut out = Vec::new();
+    let (version, _flags) = match full_box_vf(payload) {
+        Some(v) => v,
+        None => return out,
+    };
+    let mut cur = ByteCursor::new(payload);
+    if cur.seek(4).is_none() {
+        return out;
+    }
+    let sizes = match cur.u8() {
+        Some(b) => b,
+        None => return out,
+    };
+    let offset_size = sizes >> 4;
+    let length_size = sizes & 0x0F;
+    let sizes2 = match cur.u8() {
+        Some(b) => b,
+        None => return out,
+    };
+    let base_offset_size = sizes2 >> 4;
+    let index_size = sizes2 & 0x0F; // 仅 version 1/2 使用
+    let item_count = if version < 2 {
+        match cur.u16(Endian::Big) {
+            Some(c) => u32::from(c),
+            None => return out,
+        }
+    } else {
+        match cur.u32(Endian::Big) {
+            Some(c) => c,
+            None => return out,
+        }
+    };
+    for _ in 0..item_count {
+        let id = if version < 2 {
+            match cur.u16(Endian::Big) {
+                Some(v) => u32::from(v),
+                None => break,
+            }
+        } else {
+            match cur.u32(Endian::Big) {
+                Some(v) => v,
+                None => break,
+            }
+        };
+        let method = if version == 1 || version == 2 {
+            match cur.u16(Endian::Big) {
+                Some(v) => (v & 0x0F) as u8,
+                None => break,
+            }
+        } else {
+            0
+        };
+        if cur.u16(Endian::Big).is_none() {
+            break; // data_reference_index
+        }
+        let base_offset = match read_uint_be(&mut cur, base_offset_size) {
+            Some(v) => v,
+            None => break,
+        };
+        let extent_count = match cur.u16(Endian::Big) {
+            Some(v) => v,
+            None => break,
+        };
+        let mut first_extent = None;
+        let mut ok = true;
+        for i in 0..extent_count {
+            if (version == 1 || version == 2) && index_size > 0 && read_uint_be(&mut cur, index_size).is_none() {
+                ok = false;
+                break;
+            }
+            let eo = match read_uint_be(&mut cur, offset_size) {
+                Some(v) => v,
+                None => {
+                    ok = false;
+                    break;
+                }
+            };
+            let el = match read_uint_be(&mut cur, length_size) {
+                Some(v) => v,
+                None => {
+                    ok = false;
+                    break;
+                }
+            };
+            if i == 0 {
+                first_extent = Some((base_offset.saturating_add(eo), el));
+            }
+        }
+        if !ok {
+            break;
+        }
+        out.push(Loc { id, method, extent_count, first_extent });
+    }
+    out
+}
+
 #[derive(Debug, Default)]
 pub struct BmffParser {
     done: bool,
@@ -225,5 +332,45 @@ mod tests {
         p.extend_from_slice(&1u16.to_be_bytes());
         p.extend_from_slice(&infe(1, b"mime", Some(b"text/plain")));
         assert!(parse_iinf(&p).is_empty());
+    }
+
+    #[test]
+    fn parse_iloc_v0_method0_single_extent() {
+        // version 0：offset_size=4,length_size=4,base_offset_size=0,index_size=0
+        let mut p = alloc::vec![0u8, 0, 0, 0]; // vf
+        p.push(0x44); // offset4 | length4
+        p.push(0x00); // base0 | index0
+        p.extend_from_slice(&1u16.to_be_bytes()); // item_count
+        p.extend_from_slice(&1u16.to_be_bytes()); // item_id=1
+        p.extend_from_slice(&0u16.to_be_bytes()); // data_reference_index
+        p.extend_from_slice(&1u16.to_be_bytes()); // extent_count
+        p.extend_from_slice(&1000u32.to_be_bytes()); // extent_offset
+        p.extend_from_slice(&42u32.to_be_bytes()); // extent_length
+        let locs = parse_iloc(&p);
+        assert_eq!(locs.len(), 1);
+        assert_eq!(locs[0].id, 1);
+        assert_eq!(locs[0].method, 0);
+        assert_eq!(locs[0].extent_count, 1);
+        assert_eq!(locs[0].first_extent, Some((1000, 42)));
+    }
+
+    #[test]
+    fn parse_iloc_v1_method1_idat() {
+        // version 1：带 construction_method 字段；method=1（idat）
+        let mut p = alloc::vec![1u8, 0, 0, 0]; // vf, version 1
+        p.push(0x44); // offset4 | length4
+        p.push(0x00); // base0 | index0
+        p.extend_from_slice(&1u16.to_be_bytes()); // item_count
+        p.extend_from_slice(&5u16.to_be_bytes()); // item_id=5
+        p.extend_from_slice(&1u16.to_be_bytes()); // construction_method=1
+        p.extend_from_slice(&0u16.to_be_bytes()); // data_reference_index
+        p.extend_from_slice(&1u16.to_be_bytes()); // extent_count
+        p.extend_from_slice(&0u32.to_be_bytes()); // extent_offset (idat 内)
+        p.extend_from_slice(&8u32.to_be_bytes()); // extent_length
+        let locs = parse_iloc(&p);
+        assert_eq!(locs.len(), 1);
+        assert_eq!(locs[0].id, 5);
+        assert_eq!(locs[0].method, 1);
+        assert_eq!(locs[0].first_extent, Some((0, 8)));
     }
 }
