@@ -17,6 +17,8 @@ pub struct Collector {
     pub warnings: Vec<Warning>,
     width: Option<u32>,
     height: Option<u32>,
+    duration_ms: Option<u64>,
+    created: Option<crate::model::DateTimeParts>,
     limits: Limits,
 }
 
@@ -40,8 +42,16 @@ impl Collector {
                 }
             }
             Event::Warning(w) => self.warnings.push(w),
-            // Task 2 将在此收集 Duration/Created；暂先忽略。
-            Event::Field(Field::Duration(_)) | Event::Field(Field::Created(_)) => {}
+            Event::Field(Field::Duration(ms)) => {
+                if self.duration_ms.is_none() {
+                    self.duration_ms = Some(ms);
+                }
+            }
+            Event::Field(Field::Created(dt)) => {
+                if self.created.is_none() {
+                    self.created = Some(dt);
+                }
+            }
         }
     }
 }
@@ -61,6 +71,7 @@ pub enum Outcome {
 /// 收尾：把 Collector 投影为统一模型，组装 Metadata。read_slice 与 push 路径共用。
 pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
     let (width, height) = (col.width, col.height);
+    let (duration_ms, created) = (col.duration_ms, col.created);
     let raw = RawTags { exif: col.exif, xmp: col.xmp };
     let mut warnings = col.warnings;
     let mut unified = normalize(&raw, &mut warnings);
@@ -69,6 +80,12 @@ pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
     }
     if let Some(h) = height {
         unified.height = Some(h);
+    }
+    if let Some(d) = duration_ms {
+        unified.duration_ms = Some(d);
+    }
+    if let Some(c) = created {
+        unified.created = Some(c); // 容器（moov）优先于 EXIF 派生
     }
     Metadata { unified, raw, warnings, format }
 }
@@ -99,6 +116,8 @@ impl StreamDriver {
                 warnings: Vec::new(),
                 width: None,
                 height: None,
+                duration_ms: None,
+                created: None,
                 limits,
             },
             skip_remaining: 0,
@@ -301,6 +320,8 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
         warnings: Vec::new(),
         width: None,
         height: None,
+        duration_ms: None,
+        created: None,
         limits,
     };
     let mut pos: usize = 0;
@@ -743,6 +764,55 @@ mod tests {
         assert_eq!(meta.unified.height, Some(1080));
         // XMP 仍保留在 raw 层
         assert!(meta.raw.xmp.iter().any(|x| x.name == "ImageWidth" && x.value == "999"));
+    }
+
+    use crate::model::DateTimeParts;
+
+    /// 发容器 Duration/Created Field（无 EXIF）后 Done。
+    struct ContainerTimeEmitter;
+    impl MetaParser for ContainerTimeEmitter {
+        fn pull<'a>(&mut self, input: &'a [u8]) -> crate::demand::PullResult<'a> {
+            use crate::demand::PullResult;
+            let events = vec![
+                Event::Field(Field::Duration(1_501_500)),
+                Event::Field(Field::Created(DateTimeParts {
+                    year: 2018, month: 1, day: 1, hour: 12, minute: 0, second: 0, tz_offset_min: Some(0),
+                })),
+            ];
+            PullResult { demand: Demand::Done, consumed: input.len(), events }
+        }
+    }
+
+    #[test]
+    fn collector_records_duration_and_created() {
+        let buf = [0u8; 4];
+        let mut p = ContainerTimeEmitter;
+        let col = drive_slice(&buf, &mut p, Limits::default());
+        let meta = finalize(col, FileFormat::Mp4);
+        assert_eq!(meta.unified.duration_ms, Some(1_501_500));
+        assert_eq!(meta.unified.created.map(|d| d.year), Some(2018));
+        assert_eq!(meta.unified.created.and_then(|d| d.tz_offset_min), Some(0));
+    }
+
+    /// 容器 Created Field 落到 unified.created（容器 vs EXIF 覆盖在后续任务联调）。
+    struct ContainerCreatedEmitter;
+    impl MetaParser for ContainerCreatedEmitter {
+        fn pull<'a>(&mut self, input: &'a [u8]) -> crate::demand::PullResult<'a> {
+            use crate::demand::PullResult;
+            let events = vec![Event::Field(Field::Created(DateTimeParts {
+                year: 2018, month: 1, day: 1, hour: 0, minute: 0, second: 0, tz_offset_min: Some(0),
+            }))];
+            PullResult { demand: Demand::Done, consumed: input.len(), events }
+        }
+    }
+
+    #[test]
+    fn container_created_written_to_unified() {
+        let buf = [0u8; 4];
+        let mut p = ContainerCreatedEmitter;
+        let col = drive_slice(&buf, &mut p, Limits::default());
+        let meta = finalize(col, FileFormat::Mp4);
+        assert_eq!(meta.unified.created.map(|d| d.year), Some(2018));
     }
 
     fn make_tiff() -> Vec<u8> {
