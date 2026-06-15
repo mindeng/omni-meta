@@ -633,7 +633,50 @@ impl BmffParser {
             let first = self.targets[0].offset;
             return PullResult { demand: Demand::SeekTo(first), consumed: need, events };
         }
-        // 非 meta：跳过整盒。size0 / 畸形（payload_len None）→ 不可能再有 meta，干净结束。
+        if &hdr.kind == b"moov" {
+            let total = match hdr.total_size {
+                Some(t) => t,
+                None => {
+                    // size0 moov（延伸至 EOF）：本里程碑不处理，干净结束。
+                    self.done = true;
+                    return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+                }
+            };
+            let need = match usize::try_from(total) {
+                Ok(n) => n,
+                Err(_) => {
+                    self.done = true;
+                    return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+                }
+            };
+            let header_len = hdr.header_len as usize;
+            if need < header_len {
+                // 畸形 moov：声明大小小于其自身头部 → 干净结束，绝不 panic。
+                self.done = true;
+                return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+            }
+            if input.len() < need {
+                return PullResult { demand: Demand::NeedBytes(need), consumed: 0, events: Vec::new() };
+            }
+            let info = parse_moov(&input[header_len..need], self.pos);
+            let mut events: Vec<Event<'a>> = Vec::new();
+            if let Some((w, h)) = info.dims {
+                events.push(Event::Field(Field::Width(w)));
+                events.push(Event::Field(Field::Height(h)));
+            }
+            if let Some(ms) = info.duration_ms {
+                events.push(Event::Field(Field::Duration(ms)));
+            }
+            if let Some(dt) = info.created {
+                events.push(Event::Field(Field::Created(dt)));
+            }
+            for warn in info.warnings {
+                events.push(Event::Warning(warn));
+            }
+            self.done = true;
+            return PullResult { demand: Demand::Done, consumed: need, events };
+        }
+        // 非 meta/moov：跳过整盒。size0 / 畸形（payload_len None）→ 不可能再有 meta，干净结束。
         match hdr.payload_len() {
             Some(pl) => {
                 self.pos = self.pos.saturating_add(hdr.header_len).saturating_add(pl);
@@ -1191,6 +1234,52 @@ mod tests {
         assert_eq!(info.duration_ms, None);
         assert_eq!(info.created, None);
         assert!(info.warnings.is_empty());
+    }
+
+    fn ftyp_mp4() -> Vec<u8> {
+        let mut p = Vec::new();
+        p.extend_from_slice(b"isom");
+        p.extend_from_slice(&0u32.to_be_bytes());
+        p.extend_from_slice(b"mp42");
+        box_bytes(b"ftyp", &p)
+    }
+
+    fn mp4_with_moov() -> Vec<u8> {
+        let mut moov_p = Vec::new();
+        moov_p.extend_from_slice(&box_bytes(b"mvhd", &mvhd_v0(2_082_844_800, 600, 900_900)));
+        moov_p.extend_from_slice(&trak(&tkhd_v0(1920, 1080)));
+        let mut f = ftyp_mp4();
+        f.extend_from_slice(&box_bytes(b"moov", &moov_p));
+        f
+    }
+
+    #[test]
+    fn end_to_end_mp4_moov() {
+        let buf = mp4_with_moov();
+        let col = crate::driver::drive_slice(&buf, &mut BmffParser::new(), crate::limits::Limits::default());
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Mp4);
+        assert!(meta.warnings.is_empty(), "warnings: {:?}", meta.warnings);
+        assert_eq!(meta.unified.width, Some(1920));
+        assert_eq!(meta.unified.height, Some(1080));
+        assert_eq!(meta.unified.duration_ms, Some(1_501_500));
+        assert_eq!(meta.unified.created.map(|d| d.year), Some(1970));
+        assert_eq!(meta.unified.created.and_then(|d| d.tz_offset_min), Some(0));
+    }
+
+    #[test]
+    fn end_to_end_mp4_moov_after_mdat() {
+        // moov 在 mdat 之后（非 faststart）：walk 须 Skip(mdat) 再缓冲 moov。
+        let mut moov_p = Vec::new();
+        moov_p.extend_from_slice(&box_bytes(b"mvhd", &mvhd_v0(0, 600, 1200)));
+        moov_p.extend_from_slice(&trak(&tkhd_v0(640, 480)));
+        let mut f = ftyp_mp4();
+        f.extend_from_slice(&box_bytes(b"mdat", &[0u8; 64])); // 大盒被跳过、不缓冲
+        f.extend_from_slice(&box_bytes(b"moov", &moov_p));
+        let col = crate::driver::drive_slice(&f, &mut BmffParser::new(), crate::limits::Limits::default());
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Mp4);
+        assert_eq!(meta.unified.width, Some(640));
+        assert_eq!(meta.unified.duration_ms, Some(2000));
+        assert_eq!(meta.unified.created, None); // creation_time==0
     }
 
     #[test]
