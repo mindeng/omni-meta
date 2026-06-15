@@ -165,7 +165,10 @@ fn scan_elements(text: &str, out: &mut Vec<XmpProperty>, limits: &Limits) {
         // 开始标签
         let (px, nm, after_name) = parse_qname(text, i + 1);
         let gt = find_gt(b, after_name);
-        let self_closing = gt > 0 && b[gt - 1] == b'/';
+        if gt >= b.len() {
+            break; // 截断标签：无闭合 '>'
+        }
+        let self_closing = b[gt - 1] == b'/';
         let content_start = gt + 1; // '>' 之后
         if self_closing || px.is_empty() {
             i = content_start;
@@ -183,7 +186,9 @@ fn scan_elements(text: &str, out: &mut Vec<XmpProperty>, limits: &Limits) {
             i = j; // 后续闭合标签由顶层处理（不匹配栈顶则忽略）
         } else {
             let is_alt = px == "rdf" && nm == "Alt";
-            stack.push(Frame { prefix: px, name: nm, is_alt, alt_taken: false });
+            if stack.len() < limits.max_depth as usize {
+                stack.push(Frame { prefix: px, name: nm, is_alt, alt_taken: false });
+            }
             i = content_start;
         }
     }
@@ -313,5 +318,22 @@ mod tests {
         let limits = Limits { max_tags: 2, ..Limits::default() };
         decode(pkt, &mut out, &mut warns, &limits);
         assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn truncated_tag_does_not_panic() {
+        let (props, _warns) = run(b"<tiff:Make");
+        assert!(props.is_empty());
+    }
+
+    #[test]
+    fn deep_nesting_does_not_oom() {
+        // 构造 500 层嵌套开标签，确认不 panic / OOM，且栈深受 max_depth 约束
+        let mut pkt = Vec::new();
+        for _ in 0..500 {
+            pkt.extend_from_slice(b"<a:b>");
+        }
+        // 不需断言具体属性，只需正常返回即可
+        let (_, _) = run(&pkt);
     }
 }
