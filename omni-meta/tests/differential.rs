@@ -203,3 +203,43 @@ fn fixture_png() -> Vec<u8> {
 fn differential_png() {
     assert_all_equal(&fixture_png());
 }
+
+fn riff_chunk(fourcc: &[u8; 4], data: &[u8]) -> Vec<u8> {
+    let mut c = Vec::new();
+    c.extend_from_slice(fourcc);
+    c.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    c.extend_from_slice(data);
+    if data.len() % 2 == 1 {
+        c.push(0);
+    }
+    c
+}
+
+fn fixture_webp() -> Vec<u8> {
+    // VP8X 640x480
+    let mut vp8x = vec![0u8; 10];
+    let (wm1, hm1) = (639u32, 479u32);
+    vp8x[4] = (wm1 & 0xFF) as u8;
+    vp8x[5] = ((wm1 >> 8) & 0xFF) as u8;
+    vp8x[6] = ((wm1 >> 16) & 0xFF) as u8;
+    vp8x[7] = (hm1 & 0xFF) as u8;
+    vp8x[8] = ((hm1 >> 8) & 0xFF) as u8;
+    vp8x[9] = ((hm1 >> 16) & 0xFF) as u8;
+
+    let mut body = Vec::new();
+    body.extend_from_slice(b"WEBP");
+    body.extend_from_slice(&riff_chunk(b"VP8X", &vp8x));
+    body.extend_from_slice(&riff_chunk(b"EXIF", &make_tiff()));
+    body.extend_from_slice(&riff_chunk(b"XMP ", br#"<rdf:Description tiff:Make="Acme"/>"#));
+
+    let mut f = Vec::new();
+    f.extend_from_slice(b"RIFF");
+    f.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    f.extend_from_slice(&body);
+    f
+}
+
+#[test]
+fn differential_webp() {
+    assert_all_equal(&fixture_webp());
+}
