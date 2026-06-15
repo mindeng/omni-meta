@@ -17,7 +17,7 @@ impl BoxHeader {
     /// A2/A3 box 链续走时使用；当前 A1 仅测试覆盖，故抑制未使用警告。
     #[allow(dead_code)]
     pub fn payload_len(&self) -> Option<u64> {
-        self.total_size.map(|t| t.saturating_sub(self.header_len))
+        self.total_size.and_then(|t| t.checked_sub(self.header_len))
     }
 }
 
@@ -75,6 +75,17 @@ mod tests {
         assert_eq!(h.header_len, 16);
         assert_eq!(h.total_size, Some(4_000_000_000));
         assert_eq!(h.payload_len(), Some(4_000_000_000 - 16));
+    }
+
+    #[test]
+    fn malformed_size_smaller_than_header_returns_none() {
+        // size32==4 < header_len 8：畸形 box，payload_len 应返回 None。
+        let mut b = alloc::vec::Vec::new();
+        b.extend_from_slice(&4u32.to_be_bytes());
+        b.extend_from_slice(b"ftyp");
+        let h = read_box_header(&b).unwrap();
+        assert_eq!(h.total_size, Some(4));
+        assert_eq!(h.payload_len(), None);
     }
 
     #[test]

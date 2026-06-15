@@ -27,7 +27,15 @@ impl MetaParser for BmffParser {
         let hdr = match read_box_header(input) {
             Some(h) => h,
             None => {
-                return PullResult { demand: Demand::NeedBytes(8), consumed: 0, events };
+                // size==1 标记 largesize：头部需 16 字节，否则基本头 8 字节。
+                let need = if input.len() >= 4
+                    && u32::from_be_bytes([input[0], input[1], input[2], input[3]]) == 1
+                {
+                    16
+                } else {
+                    8
+                };
+                return PullResult { demand: Demand::NeedBytes(need), consumed: 0, events };
             }
         };
         // probe 已确保首盒为 ftyp（hdr 仅用于确认头部可完整读出）。
@@ -66,6 +74,20 @@ mod tests {
         let mut p = BmffParser::new();
         let res = p.pull(&[0, 0, 0]); // <8 字节
         assert_eq!(res.demand, Demand::NeedBytes(8));
+        assert_eq!(res.consumed, 0);
+    }
+
+    #[test]
+    fn largesize_partial_header_needs_16() {
+        // size32==1 标记 largesize：头部需 16 字节。
+        // 输入仅 12 字节（8 基本头 + 4/8 largesize），应索要 16 而非 8。
+        let mut b = Vec::new();
+        b.extend_from_slice(&1u32.to_be_bytes()); // size32==1
+        b.extend_from_slice(b"mdat");
+        b.extend_from_slice(&[0u8; 4]); // largesize 仅 4 字节
+        let mut p = BmffParser::new();
+        let res = p.pull(&b);
+        assert_eq!(res.demand, Demand::NeedBytes(16));
         assert_eq!(res.consumed, 0);
     }
 
