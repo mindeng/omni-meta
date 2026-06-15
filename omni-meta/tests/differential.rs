@@ -548,3 +548,77 @@ fn differential_bmff_heic() {
     // 四适配器对 SeekTo 抽取（meta 在前、数据在 mdat）逐字段一致。
     assert_all_equal(&fixture_bmff_heic());
 }
+
+fn mp4_mvhd_v0(creation: u32, timescale: u32, duration: u32) -> Vec<u8> {
+    let mut p = vec![0u8, 0, 0, 0];
+    p.extend_from_slice(&creation.to_be_bytes());
+    p.extend_from_slice(&0u32.to_be_bytes());
+    p.extend_from_slice(&timescale.to_be_bytes());
+    p.extend_from_slice(&duration.to_be_bytes());
+    p
+}
+
+fn mp4_tkhd_v0(w: u32, h: u32) -> Vec<u8> {
+    let mut p = vec![0u8, 0, 0, 7];
+    p.extend_from_slice(&0u32.to_be_bytes()); // creation
+    p.extend_from_slice(&0u32.to_be_bytes()); // modification
+    p.extend_from_slice(&1u32.to_be_bytes()); // track_ID
+    p.extend_from_slice(&0u32.to_be_bytes()); // reserved
+    p.extend_from_slice(&0u32.to_be_bytes()); // duration
+    p.extend_from_slice(&[0u8; 8]);           // reserved[2]
+    p.extend_from_slice(&[0u8; 8]);           // layer/alt/volume/reserved
+    p.extend_from_slice(&[0u8; 36]);          // matrix
+    p.extend_from_slice(&(w << 16).to_be_bytes());
+    p.extend_from_slice(&(h << 16).to_be_bytes());
+    p
+}
+
+fn fixture_bmff_mp4() -> Vec<u8> {
+    let mut ftyp_p = Vec::new();
+    ftyp_p.extend_from_slice(b"isom");
+    ftyp_p.extend_from_slice(&0u32.to_be_bytes());
+    ftyp_p.extend_from_slice(b"mp42");
+    let ftyp = bmff_box(b"ftyp", &ftyp_p);
+
+    let mut moov_p = Vec::new();
+    moov_p.extend_from_slice(&bmff_box(b"mvhd", &mp4_mvhd_v0(2_082_844_800, 600, 900_900)));
+    moov_p.extend_from_slice(&bmff_box(b"trak", &bmff_box(b"tkhd", &mp4_tkhd_v0(1920, 1080))));
+    let moov = bmff_box(b"moov", &moov_p);
+
+    let mut f = Vec::new();
+    f.extend_from_slice(&ftyp);
+    f.extend_from_slice(&moov);
+    f
+}
+
+/// moov 在 mdat 之后：行使 read_seek 的 Skip/seek 路径。
+fn fixture_bmff_mp4_moov_after_mdat() -> Vec<u8> {
+    let mut ftyp_p = Vec::new();
+    ftyp_p.extend_from_slice(b"isom");
+    ftyp_p.extend_from_slice(&0u32.to_be_bytes());
+    ftyp_p.extend_from_slice(b"mp42");
+    let ftyp = bmff_box(b"ftyp", &ftyp_p);
+
+    let mut moov_p = Vec::new();
+    moov_p.extend_from_slice(&bmff_box(b"mvhd", &mp4_mvhd_v0(0, 1000, 5000)));
+    moov_p.extend_from_slice(&bmff_box(b"trak", &bmff_box(b"tkhd", &mp4_tkhd_v0(640, 480))));
+    let moov = bmff_box(b"moov", &moov_p);
+
+    let mdat = bmff_box(b"mdat", &[0u8; 10_000]); // >8192 读块，强制 seek 路径
+
+    let mut f = Vec::new();
+    f.extend_from_slice(&ftyp);
+    f.extend_from_slice(&mdat);
+    f.extend_from_slice(&moov);
+    f
+}
+
+#[test]
+fn differential_bmff_mp4() {
+    assert_all_equal(&fixture_bmff_mp4());
+}
+
+#[test]
+fn differential_bmff_mp4_moov_after_mdat() {
+    assert_all_equal(&fixture_bmff_mp4_moov_after_mdat());
+}
