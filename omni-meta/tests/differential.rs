@@ -137,3 +137,29 @@ fn differential_huge_nonmeta() {
     // 返回 SkipHint，从而覆盖 read_seek 的原生 seek 分支。
     assert_all_equal(&fixture_huge_nonmeta());
 }
+
+fn fixture_with_sof() -> Vec<u8> {
+    let mut j: Vec<u8> = Vec::new();
+    j.extend_from_slice(&[0xFF, 0xD8]);           // SOI
+    j.extend_from_slice(&[0xFF, 0xC0]);           // SOF0
+    j.extend_from_slice(&10u16.to_be_bytes());    // len = 2 + 8 body bytes
+    j.push(8);                                    // precision
+    j.extend_from_slice(&1080u16.to_be_bytes());  // height
+    j.extend_from_slice(&1920u16.to_be_bytes());  // width
+    j.extend_from_slice(&[1, 0x11, 0]);           // 1 component
+    let tiff = make_tiff();
+    let mut body: Vec<u8> = Vec::new();
+    body.extend_from_slice(b"Exif\0\0");
+    body.extend_from_slice(&tiff);
+    let len = (body.len() + 2) as u16;
+    j.extend_from_slice(&[0xFF, 0xE1]);
+    j.extend_from_slice(&len.to_be_bytes());
+    j.extend_from_slice(&body);
+    j.extend_from_slice(&[0xFF, 0xD9]);           // EOI
+    j
+}
+
+#[test]
+fn differential_sof_dimensions() {
+    assert_all_equal(&fixture_with_sof());
+}

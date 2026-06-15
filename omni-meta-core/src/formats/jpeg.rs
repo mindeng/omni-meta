@@ -308,12 +308,12 @@ mod tests {
     /// SOF0 段应发出 Width/Height Field，并继续到 EOI。
     #[test]
     fn sof_emits_dimensions() {
-        // SOI + SOF0(len=17: precision1 + height2 + width2 + ...) + EOI
+        // SOI + SOF0(len=10: 2(len字段) + 1(precision) + 2(height) + 2(width) + 3(1 组件)) + EOI
         let mut j: Vec<u8> = Vec::new();
         j.extend_from_slice(&[0xFF, 0xD8]); // SOI
         j.extend_from_slice(&[0xFF, 0xC0]); // SOF0
-        // 段长 = 2(len) + 1(precision) + 2(height) + 2(width) + 6(1 组件) = 13
-        j.extend_from_slice(&13u16.to_be_bytes());
+        // 段长 = 2(len) + 1(precision) + 2(height) + 2(width) + 3(1 组件) = 8 body → len=10
+        j.extend_from_slice(&10u16.to_be_bytes());
         j.push(8); // precision
         j.extend_from_slice(&1080u16.to_be_bytes()); // height
         j.extend_from_slice(&1920u16.to_be_bytes()); // width
@@ -334,6 +334,12 @@ mod tests {
         }
         assert_eq!(w, Some(1920));
         assert_eq!(h, Some(1080));
+        assert_eq!(res.demand, Demand::Skip(8));
+        assert_eq!(res.consumed, 6); // pos(2: SOI) + body_start(4)
+        // 经 drive_slice 跑完整 fixture：维度收集 + 干净到 Done（无警告）
+        let mut p2 = JpegParser::new();
+        let col = crate::driver::drive_slice(&j, &mut p2, crate::limits::Limits::default());
+        assert!(col.warnings.is_empty(), "unexpected warnings: {:?}", col.warnings);
     }
 
     /// 非元数据段（APP0/JFIF）应发 Skip 跳过段体，consumed 指向段体起点。
