@@ -196,6 +196,94 @@ fn parse_iloc(payload: &[u8]) -> Vec<Loc> {
     out
 }
 
+/// 解析 `pitm`（PrimaryItemBox）→ 主 item ID。
+fn parse_pitm(payload: &[u8]) -> Option<u32> {
+    let (version, _flags) = full_box_vf(payload)?;
+    let mut cur = ByteCursor::new(payload);
+    cur.seek(4)?;
+    if version == 0 {
+        cur.u16(Endian::Big).map(u32::from)
+    } else {
+        cur.u32(Endian::Big)
+    }
+}
+
+/// 解析 `ispe`（ImageSpatialExtentsProperty）→ (width, height)。
+fn parse_ispe(payload: &[u8]) -> Option<(u32, u32)> {
+    let _vf = full_box_vf(payload)?;
+    let mut cur = ByteCursor::new(payload);
+    cur.seek(4)?;
+    let w = cur.u32(Endian::Big)?;
+    let h = cur.u32(Endian::Big)?;
+    Some((w, h))
+}
+
+/// 从 `ipma` 关联中找主 item 的 ispe 维度。`props` 为 ipco 子盒按序的 ispe 维度（非 ispe 为 None）。
+fn dims_via_ipma(payload: &[u8], primary: u32, props: &[Option<(u32, u32)>]) -> Option<(u32, u32)> {
+    let (version, flags) = full_box_vf(payload)?;
+    let mut cur = ByteCursor::new(payload);
+    cur.seek(4)?;
+    let entry_count = cur.u32(Endian::Big)?;
+    let wide_index = (flags & 1) == 1;
+    for _ in 0..entry_count {
+        let item_id = if version < 1 {
+            u32::from(cur.u16(Endian::Big)?)
+        } else {
+            cur.u32(Endian::Big)?
+        };
+        let assoc_count = cur.u8()?;
+        for _ in 0..assoc_count {
+            let idx = if wide_index {
+                (cur.u16(Endian::Big)? & 0x7FFF) as usize
+            } else {
+                (cur.u8()? & 0x7F) as usize
+            };
+            if item_id == primary && idx >= 1 {
+                if let Some(Some(dims)) = props.get(idx - 1) {
+                    return Some(*dims);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 解析 `iprp`（ItemPropertiesBox）→ 主 item 维度。
+/// 优先 pitm+ipma 关联；兜底：ipco 内恰好一个 ispe 时直接用。
+fn dims_from_iprp(iprp_payload: &[u8], primary: Option<u32>) -> Option<(u32, u32)> {
+    let mut ipco_payload: Option<&[u8]> = None;
+    let mut ipma_payload: Option<&[u8]> = None;
+    for (hdr, p) in iter_child_boxes(iprp_payload) {
+        match &hdr.kind {
+            b"ipco" => ipco_payload = Some(p),
+            b"ipma" => ipma_payload = Some(p),
+            _ => {}
+        }
+    }
+    let ipco = ipco_payload?;
+    let mut props: Vec<Option<(u32, u32)>> = Vec::new();
+    for (hdr, p) in iter_child_boxes(ipco) {
+        props.push(if &hdr.kind == b"ispe" { parse_ispe(p) } else { None });
+    }
+    if let (Some(ipma), Some(pid)) = (ipma_payload, primary) {
+        if let Some(dims) = dims_via_ipma(ipma, pid, &props) {
+            return Some(dims);
+        }
+    }
+    // 兜底：恰好一个 ispe
+    let mut found = None;
+    let mut n = 0u32;
+    for d in props.iter().flatten() {
+        found = Some(*d);
+        n += 1;
+    }
+    if n == 1 {
+        found
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct BmffParser {
     done: bool,
@@ -372,5 +460,43 @@ mod tests {
         assert_eq!(locs[0].id, 5);
         assert_eq!(locs[0].method, 1);
         assert_eq!(locs[0].first_extent, Some((0, 8)));
+    }
+
+    fn ispe(w: u32, h: u32) -> Vec<u8> {
+        let mut p = alloc::vec![0u8, 0, 0, 0];
+        p.extend_from_slice(&w.to_be_bytes());
+        p.extend_from_slice(&h.to_be_bytes());
+        box_bytes(b"ispe", &p)
+    }
+
+    #[test]
+    fn parse_pitm_and_ispe() {
+        let mut pitm_p = alloc::vec![0u8, 0, 0, 0];
+        pitm_p.extend_from_slice(&7u16.to_be_bytes());
+        assert_eq!(parse_pitm(&box_bytes(b"pitm", &pitm_p)[8..]), Some(7));
+        assert_eq!(parse_ispe(&ispe(4032, 3024)[8..]), Some((4032, 3024)));
+    }
+
+    #[test]
+    fn dims_from_iprp_via_ipma() {
+        // ipco: [ispe 4032x3024]；ipma: item 1 → property #1
+        let ipco = box_bytes(b"ipco", &ispe(4032, 3024));
+        let mut ipma_p = alloc::vec![0u8, 0, 0, 0];
+        ipma_p.extend_from_slice(&1u32.to_be_bytes()); // entry_count
+        ipma_p.extend_from_slice(&1u16.to_be_bytes()); // item_id=1
+        ipma_p.push(1); // assoc_count
+        ipma_p.push(1); // 属性序号 1（essential bit 0）
+        let ipma = box_bytes(b"ipma", &ipma_p);
+        let mut iprp_p = Vec::new();
+        iprp_p.extend_from_slice(&ipco);
+        iprp_p.extend_from_slice(&ipma);
+        assert_eq!(dims_from_iprp(&box_bytes(b"iprp", &iprp_p)[8..], Some(1)), Some((4032, 3024)));
+    }
+
+    #[test]
+    fn dims_from_iprp_single_ispe_fallback() {
+        // 无 ipma 关联，但 ipco 仅一个 ispe → 兜底直接用
+        let ipco = box_bytes(b"ipco", &ispe(640, 480));
+        assert_eq!(dims_from_iprp(&box_bytes(b"iprp", &ipco)[8..], None), Some((640, 480)));
     }
 }
