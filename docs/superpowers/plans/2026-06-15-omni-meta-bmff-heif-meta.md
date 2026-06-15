@@ -1254,6 +1254,8 @@ git commit -m "feat: BmffParser 两阶段状态机 (Walk 找 meta + Extract Seek
         assert_eq!(meta.unified.height, Some(3024));
         assert!(meta.raw.exif.iter().any(|t| t.tag == 0x010F), "应抽到 Make 标签");
         assert!(meta.raw.xmp.iter().any(|x| x.name == "Make" && x.value == "Acme"));
+        assert_eq!(meta.unified.camera_make.as_deref(), Some("Acme"),
+            "unified.camera_make 须经 normalize 从 EXIF IFD0 Make 投影");
     }
 
     #[test]
@@ -1293,6 +1295,8 @@ git commit -m "feat: BmffParser 两阶段状态机 (Walk 找 meta + Extract Seek
         let meta = crate::driver::finalize(col, crate::model::FileFormat::Heif);
         assert!(meta.warnings.is_empty(), "warnings: {:?}", meta.warnings);
         assert!(meta.raw.exif.iter().any(|t| t.tag == 0x010F), "idat 内联 Exif 应被抽到");
+        assert_eq!(meta.unified.camera_make.as_deref(), Some("Acme"),
+            "idat 路径 EXIF 同样须经 normalize 投影至 unified");
     }
 ```
 
