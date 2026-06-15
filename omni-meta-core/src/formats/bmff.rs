@@ -6,7 +6,42 @@ use alloc::vec::Vec;
 use crate::containers::isobmff::{full_box_vf, iter_child_boxes, read_box_header, read_uint_be};
 use crate::cursor::{ByteCursor, Endian};
 use crate::demand::{Demand, Event, MetaParser, PayloadKind, PullResult};
-use crate::model::{Field, WarnKind, Warning};
+use crate::model::{DateTimeParts, Field, WarnKind, Warning};
+
+/// MP4/MOV 纪元起点（1904-01-01）相对 Unix 纪元（1970-01-01）的天数差。
+const MP4_EPOCH_DAYS_BEFORE_UNIX: i64 = 24107;
+
+/// 民用历法：自 1970-01-01 起的天数 → (year, month, day)。
+/// Howard Hinnant `civil_from_days` 算法，纯整数、no_std 安全。
+fn civil_from_days(days: i64) -> (u16, u8, u8) {
+    let z = days + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u8; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u8; // [1, 12]
+    let year = (y + if m <= 2 { 1 } else { 0 }) as u16;
+    (year, m, d)
+}
+
+/// MP4/MOV creation_time（自 1904-01-01 00:00:00 UTC 的秒）→ DateTimeParts（UTC）。
+fn datetime_from_mp4_epoch(secs: u64) -> DateTimeParts {
+    let days = (secs / 86_400) as i64 - MP4_EPOCH_DAYS_BEFORE_UNIX;
+    let tod = (secs % 86_400) as u32;
+    let (year, month, day) = civil_from_days(days);
+    DateTimeParts {
+        year,
+        month,
+        day,
+        hour: (tod / 3600) as u8,
+        minute: ((tod % 3600) / 60) as u8,
+        second: (tod % 60) as u8,
+        tz_offset_min: Some(0),
+    }
+}
 
 /// 我们关心的一个 item（EXIF 或 XMP）及其 ID。
 struct Wanted {
@@ -892,6 +927,31 @@ mod tests {
         assert!(meta.raw.xmp.iter().any(|x| x.name == "Make" && x.value == "Acme"));
         assert_eq!(meta.unified.camera_make.as_deref(), Some("Acme"),
             "unified.camera_make 须经 normalize 从 EXIF IFD0 Make 投影");
+    }
+
+    #[test]
+    fn civil_from_days_known_vectors() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(31), (1970, 2, 1));
+        assert_eq!(civil_from_days(-1), (1969, 12, 31));
+        assert_eq!(civil_from_days(59), (1970, 3, 1)); // 1970 非闰
+    }
+
+    #[test]
+    fn datetime_from_mp4_epoch_anchor() {
+        // 24107 天 = 2_082_844_800 秒后正好是 1970-01-01T00:00:00 UTC。
+        let dt = datetime_from_mp4_epoch(2_082_844_800);
+        assert_eq!((dt.year, dt.month, dt.day), (1970, 1, 1));
+        assert_eq!((dt.hour, dt.minute, dt.second), (0, 0, 0));
+        assert_eq!(dt.tz_offset_min, Some(0)); // BMFF 即 UTC
+    }
+
+    #[test]
+    fn datetime_from_mp4_epoch_offsets() {
+        let next_day = datetime_from_mp4_epoch(2_082_844_800 + 86_400);
+        assert_eq!((next_day.year, next_day.month, next_day.day), (1970, 1, 2));
+        let tod = datetime_from_mp4_epoch(2_082_844_800 + 3_661);
+        assert_eq!((tod.hour, tod.minute, tod.second), (1, 1, 1));
     }
 
     #[test]
