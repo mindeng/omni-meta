@@ -1322,4 +1322,51 @@ mod tests {
         assert_eq!(meta.unified.camera_make.as_deref(), Some("Acme"),
             "idat 路径 EXIF 同样须经 normalize 投影至 unified");
     }
+
+    #[test]
+    fn drive_truncated_moov_warns_truncated() {
+        // moov 声明 size=300 但实际仅 20 字节 → driver 到 EOF 记 Truncated，不 panic。
+        let mut buf = ftyp_mp4();
+        let mut moov = Vec::new();
+        moov.extend_from_slice(&300u32.to_be_bytes());
+        moov.extend_from_slice(b"moov");
+        moov.extend_from_slice(&[0u8; 12]);
+        buf.extend_from_slice(&moov);
+        let col = crate::driver::drive_slice(&buf, &mut BmffParser::new(), crate::limits::Limits::default());
+        assert!(col.warnings.iter().any(|w| w.kind == WarnKind::Truncated));
+    }
+
+    #[test]
+    fn parse_mvhd_duration_overflow_no_panic() {
+        // duration=u64::MAX, timescale=1 → *1000 溢出 u64 → 无 duration、标记无效。
+        let m = parse_mvhd(&mvhd_v1(2_082_844_800, 1, u64::MAX));
+        assert_eq!(m.duration_ms, None);
+        assert!(m.timescale_invalid);
+    }
+
+    #[test]
+    fn parse_moov_nested_overrun_does_not_panic() {
+        // trak 声明子盒长度越界 → iter_child_boxes 停止，不 panic、无维度。
+        let mut bad_trak_p = Vec::new();
+        bad_trak_p.extend_from_slice(&999u32.to_be_bytes()); // tkhd 声明 999 > 实际
+        bad_trak_p.extend_from_slice(b"tkhd");
+        bad_trak_p.extend_from_slice(&[0u8; 4]);
+        let mut moov_p = Vec::new();
+        moov_p.extend_from_slice(&box_bytes(b"trak", &bad_trak_p));
+        let info = parse_moov(&moov_p, 0);
+        assert_eq!(info.dims, None);
+    }
+
+    #[test]
+    fn drive_moov_declared_larger_than_file_is_truncated() {
+        // 顶层 moov 头声明 size 大于文件剩余 → NeedBytes 到 EOF → Truncated，绝不 panic。
+        let mut buf = ftyp_mp4();
+        let mut moov = Vec::new();
+        moov.extend_from_slice(&100_000u32.to_be_bytes());
+        moov.extend_from_slice(b"moov");
+        moov.extend_from_slice(&[0u8; 8]);
+        buf.extend_from_slice(&moov);
+        let col = crate::driver::drive_slice(&buf, &mut BmffParser::new(), crate::limits::Limits::default());
+        assert!(col.warnings.iter().any(|w| w.kind == WarnKind::Truncated));
+    }
 }
