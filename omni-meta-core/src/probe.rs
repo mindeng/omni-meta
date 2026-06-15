@@ -51,6 +51,9 @@ pub(crate) fn parser_for(fmt: FileFormat) -> Option<Box<dyn MetaParser>> {
         FileFormat::Png => Some(Box::new(crate::formats::png::PngParser::new())),
         FileFormat::Webp => Some(Box::new(crate::formats::webp::WebpParser::new())),
         FileFormat::Gif => Some(Box::new(crate::formats::gif::GifParser::new())),
+        FileFormat::Heif | FileFormat::Avif | FileFormat::Mp4 | FileFormat::Mov => {
+            Some(Box::new(crate::formats::bmff::BmffParser::new()))
+        }
         _ => None,
     }
 }
@@ -129,5 +132,17 @@ mod tests {
         assert!(parser_for(FileFormat::Avif).is_some());
         assert!(parser_for(FileFormat::Mp4).is_some());
         assert!(parser_for(FileFormat::Mov).is_some());
+    }
+
+    #[test]
+    fn read_slice_recognizes_heic_empty_meta() {
+        use crate::adapters::slice::{read_slice, Options};
+        let buf = ftyp(b"heic");
+        let meta = read_slice(&buf, Options::default()).unwrap();
+        assert_eq!(meta.format, FileFormat::Heif);
+        // A1 不抽取任何字段，但必须干净返回、无警告。
+        assert!(meta.warnings.is_empty(), "warnings: {:?}", meta.warnings);
+        assert_eq!(meta.unified.width, None);
+        assert!(meta.raw.exif.is_empty());
     }
 }
