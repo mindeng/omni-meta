@@ -3,3 +3,10 @@
 #![forbid(unsafe_code)]
 
 pub use omni_meta_core::*;
+
+#[cfg(feature = "std")]
+mod adapters;
+#[cfg(feature = "std")]
+pub use adapters::blocking::read_blocking;
+#[cfg(feature = "std")]
+pub use adapters::seek::read_seek;
