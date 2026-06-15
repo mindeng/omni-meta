@@ -64,10 +64,20 @@ pub struct XmpProperty {
     pub value: String,
 }
 
+/// EXIF IFD 来源标识。raw 层据此记录每条标签所属的 IFD。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IfdKind {
+    Primary,   // IFD0
+    Thumbnail, // IFD1（next-IFD 链）
+    Exif,      // 0x8769
+    Gps,       // 0x8825
+    Interop,   // 0xA005
+}
+
 /// 一条原始 EXIF 标签。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExifTag {
-    pub ifd: u8,
+    pub ifd: IfdKind,
     pub tag: u16,
     pub value: Value,
 }

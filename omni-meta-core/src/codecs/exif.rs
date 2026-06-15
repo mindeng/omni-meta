@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 use crate::cursor::{ByteCursor, Endian};
 use crate::limits::Limits;
-use crate::model::{ExifTag, Value, WarnKind, Warning};
+use crate::model::{ExifTag, IfdKind, Value, WarnKind, Warning};
 
 /// 解码一段 TIFF 字节（即 APP1 "Exif\0\0" 之后的内容）。
 pub fn decode(
@@ -79,7 +79,7 @@ fn parse_ifd(
             None => break,
         };
         if let Some(val) = read_value(tiff, e, typ, cnt, valoff, limits.max_payload_bytes) {
-            out.push(ExifTag { ifd: 0, tag, value: val });
+            out.push(ExifTag { ifd: IfdKind::Primary, tag, value: val });
         }
     }
 }
@@ -175,8 +175,8 @@ mod tests {
         decode(&tiff, &mut out, &mut warns, &Limits::default());
         assert!(warns.is_empty(), "unexpected warnings: {:?}", warns);
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0], ExifTag { ifd: 0, tag: 0x010F, value: Value::Text(String::from("Acme")) });
-        assert_eq!(out[1], ExifTag { ifd: 0, tag: 0x0112, value: Value::U16(6) });
+        assert_eq!(out[0], ExifTag { ifd: IfdKind::Primary, tag: 0x010F, value: Value::Text(String::from("Acme")) });
+        assert_eq!(out[1], ExifTag { ifd: IfdKind::Primary, tag: 0x0112, value: Value::U16(6) });
     }
 
     #[test]
@@ -222,8 +222,8 @@ mod tests {
         decode(&tiff, &mut out, &mut warns, &Limits::default());
         assert!(warns.is_empty(), "unexpected warnings: {:?}", warns);
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0], ExifTag { ifd: 0, tag: 0x010F, value: Value::Text(String::from("Acme")) });
-        assert_eq!(out[1], ExifTag { ifd: 0, tag: 0x0112, value: Value::U16(6) });
+        assert_eq!(out[0], ExifTag { ifd: IfdKind::Primary, tag: 0x010F, value: Value::Text(String::from("Acme")) });
+        assert_eq!(out[1], ExifTag { ifd: IfdKind::Primary, tag: 0x0112, value: Value::U16(6) });
     }
 
     #[test]

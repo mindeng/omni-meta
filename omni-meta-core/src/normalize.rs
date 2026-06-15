@@ -65,7 +65,7 @@ pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ExifTag, XmpProperty};
+    use crate::model::{ExifTag, IfdKind, XmpProperty};
     use alloc::string::String;
     use alloc::vec::Vec;
 
@@ -73,9 +73,9 @@ mod tests {
     fn projects_exif_tags_to_unified() {
         let raw = RawTags {
             exif: Vec::from([
-                ExifTag { ifd: 0, tag: 0x010F, value: Value::Text(String::from("Acme")) },
-                ExifTag { ifd: 0, tag: 0x0110, value: Value::Text(String::from("X100")) },
-                ExifTag { ifd: 0, tag: 0x0112, value: Value::U16(6) },
+                ExifTag { ifd: IfdKind::Primary, tag: 0x010F, value: Value::Text(String::from("Acme")) },
+                ExifTag { ifd: IfdKind::Primary, tag: 0x0110, value: Value::Text(String::from("X100")) },
+                ExifTag { ifd: IfdKind::Primary, tag: 0x0112, value: Value::U16(6) },
             ]),
             xmp: Vec::new(),
         };
@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn unknown_orientation_value_is_dropped_with_warning() {
         let raw = RawTags {
-            exif: Vec::from([ExifTag { ifd: 0, tag: 0x0112, value: Value::U16(99) }]),
+            exif: Vec::from([ExifTag { ifd: IfdKind::Primary, tag: 0x0112, value: Value::U16(99) }]),
             xmp: Vec::new(),
         };
         let mut warnings = Vec::new();
@@ -133,7 +133,7 @@ mod tests {
     fn exif_wins_over_xmp() {
         let raw = RawTags {
             exif: Vec::from([ExifTag {
-                ifd: 0,
+                ifd: IfdKind::Primary,
                 tag: 0x010F,
                 value: Value::Text(String::from("ExifMake")),
             }]),
