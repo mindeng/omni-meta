@@ -87,7 +87,7 @@ while let Some(p) = queue.pop() {
 
 ### 4. 泛化值读取器
 
-按 EXIF type 计算 `unit_size`(BYTE/ASCII/UNDEFINED=1,SHORT=2,LONG/SLONG=4,RATIONAL/SRATIONAL=8;未知 type → 跳过该 tag),再 `total = cnt * unit_size`(checked 乘法)。
+按 EXIF type 计算 `unit_size`(BYTE/ASCII/UNDEFINED=1,SHORT=2,LONG=4,RATIONAL/SRATIONAL=8;未知 type 含罕见的 SLONG type 9 → 跳过该 tag,因 `Value` 不设独立 I32 标量),再 `total = cnt * unit_size`(checked 乘法)。
 
 - `total ≤ 4` → 从 `valoff` 内联读;否则从偏移读。**两路都对 `tiff` 做边界检查**,且 `total ≤ max_payload_bytes`。
 - `cnt==1` → 标量变体;`cnt>1` → `List`(ASCII→单个 `Text`,BYTE/UNDEFINED→单个 `Bytes`)。
