@@ -91,6 +91,29 @@ fn parse_mvhd(payload: &[u8]) -> Mvhd {
     out
 }
 
+/// 解析 `tkhd`（TrackHeaderBox）载荷 → (width, height) 像素整数。
+/// width/height 为载荷末 8 字节的 16.16 定点；按 version 计算偏移以避免误读
+/// 可能的尾随字节。任一为 0（音频/数据/提示轨）或截断 → None。
+fn parse_tkhd(payload: &[u8]) -> Option<(u32, u32)> {
+    let (version, _flags) = full_box_vf(payload)?;
+    // version 0: width @76 height @80（载荷 ≥84）；version 1: width @88 height @92（≥96）。
+    let woff = if version == 1 { 88 } else { 76 };
+    let wfix = read_u32_at(payload, woff)?;
+    let hfix = read_u32_at(payload, woff + 4)?;
+    let (w, h) = (wfix >> 16, hfix >> 16);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some((w, h))
+}
+
+/// 从切片指定偏移读大端 u32；越界 → None。
+fn read_u32_at(b: &[u8], off: usize) -> Option<u32> {
+    let end = off.checked_add(4)?;
+    let s = b.get(off..end)?;
+    Some(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
+}
+
 /// 我们关心的一个 item（EXIF 或 XMP）及其 ID。
 struct Wanted {
     id: u32,
@@ -1057,6 +1080,41 @@ mod tests {
         assert_eq!((next_day.year, next_day.month, next_day.day), (1970, 1, 2));
         let tod = datetime_from_mp4_epoch(2_082_844_800 + 3_661);
         assert_eq!((tod.hour, tod.minute, tod.second), (1, 1, 1));
+    }
+
+    /// tkhd 载荷（box 头之后），version 0。width/height 为 16.16 定点。
+    fn tkhd_v0(w: u32, h: u32) -> Vec<u8> {
+        let mut p = alloc::vec![0u8, 0, 0, 7]; // version 0, flags=0x000007
+        p.extend_from_slice(&0u32.to_be_bytes()); // creation
+        p.extend_from_slice(&0u32.to_be_bytes()); // modification
+        p.extend_from_slice(&1u32.to_be_bytes()); // track_ID
+        p.extend_from_slice(&0u32.to_be_bytes()); // reserved
+        p.extend_from_slice(&0u32.to_be_bytes()); // duration
+        p.extend_from_slice(&[0u8; 8]); // reserved[2]
+        p.extend_from_slice(&0i16.to_be_bytes()); // layer
+        p.extend_from_slice(&0i16.to_be_bytes()); // alternate_group
+        p.extend_from_slice(&0i16.to_be_bytes()); // volume
+        p.extend_from_slice(&0u16.to_be_bytes()); // reserved
+        p.extend_from_slice(&[0u8; 36]); // matrix[9]
+        p.extend_from_slice(&(w << 16).to_be_bytes()); // width 16.16
+        p.extend_from_slice(&(h << 16).to_be_bytes()); // height 16.16
+        p
+    }
+
+    #[test]
+    fn parse_tkhd_v0_fixed_point_dims() {
+        assert_eq!(parse_tkhd(&tkhd_v0(1920, 1080)), Some((1920, 1080)));
+    }
+
+    #[test]
+    fn parse_tkhd_zero_dims_is_none() {
+        // 音频/数据轨 width=height=0 → None（不选作维度来源）。
+        assert_eq!(parse_tkhd(&tkhd_v0(0, 0)), None);
+    }
+
+    #[test]
+    fn parse_tkhd_truncated_is_none() {
+        assert_eq!(parse_tkhd(&[0u8, 0, 0, 0, 1, 2]), None);
     }
 
     #[test]
