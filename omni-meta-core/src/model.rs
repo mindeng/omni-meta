@@ -42,11 +42,16 @@ impl Orientation {
     }
 }
 
-/// 类型化的标签值（本计划只用到 U16 / Text，后续扩展 Rational/Bytes 等）。
+/// 类型化的标签值。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
-    U16(u16),
-    Text(String),
+    U16(u16),            // SHORT, cnt==1
+    U32(u32),            // LONG,  cnt==1
+    Text(String),        // ASCII
+    Rational(u32, u32),  // RATIONAL  num/den
+    SRational(i32, i32), // SRATIONAL num/den
+    Bytes(Vec<u8>),      // BYTE / UNDEFINED
+    List(Vec<Value>),    // 任意数值类型 cnt>1（如 GPS lat = 3×Rational）
 }
 
 /// 容器原生字段（解析器直接从头部读出，不经 codec）。

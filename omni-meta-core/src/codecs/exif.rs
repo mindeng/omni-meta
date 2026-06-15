@@ -84,6 +84,25 @@ fn parse_ifd(
     }
 }
 
+/// EXIF type → 单元字节数；未知/不支持(含罕见 SLONG type 9)返回 None。
+fn unit_size(typ: u16) -> Option<usize> {
+    Some(match typ {
+        1 | 2 | 7 => 1, // BYTE / ASCII / UNDEFINED
+        3 => 2,         // SHORT
+        4 => 4,         // LONG
+        5 | 10 => 8,    // RATIONAL / SRATIONAL
+        _ => return None,
+    })
+}
+
+fn read_u32_at(e: Endian, b: &[u8; 4]) -> u32 {
+    match e {
+        Endian::Little => u32::from_le_bytes(*b),
+        Endian::Big => u32::from_be_bytes(*b),
+    }
+}
+
+/// 解出一条标签的值。失败(越界/未知类型/超上界)返回 None 并丢弃该标签,绝不 panic。
 fn read_value(
     tiff: &[u8],
     e: Endian,
@@ -93,44 +112,63 @@ fn read_value(
     max_value_bytes: usize,
 ) -> Option<Value> {
     debug_assert_eq!(valoff.len(), 4);
+    let unit = unit_size(typ)?;
+    let total = (cnt as usize).checked_mul(unit)?;
+    // cnt==0 畸形；total 超上界则丢弃,防止聚合放大。
+    if total == 0 || total > max_value_bytes {
+        return None;
+    }
+    // <=4 字节内联于 valoff,否则按偏移取并做边界检查。
+    let data: &[u8] = if total <= 4 {
+        &valoff[..total]
+    } else {
+        let off = read_u32_at(e, valoff.try_into().ok()?) as usize;
+        let end = off.checked_add(total)?;
+        tiff.get(off..end)?
+    };
+    decode_typed(e, typ, cnt, data)
+}
+
+/// 把已定位的字节切片按 type 解成 Value。ASCII→单个 Text,BYTE/UNDEFINED→单个 Bytes,
+/// 数值类型 cnt==1→标量,cnt>1→List。
+fn decode_typed(e: Endian, typ: u16, cnt: u32, data: &[u8]) -> Option<Value> {
     match typ {
-        // SHORT：本计划只取 cnt==1。
-        3 => {
-            if cnt != 1 {
-                return None;
-            }
-            let v = match e {
-                Endian::Little => u16::from_le_bytes([valoff[0], valoff[1]]),
-                Endian::Big => u16::from_be_bytes([valoff[0], valoff[1]]),
-            };
-            Some(Value::U16(v))
-        }
-        // ASCII：<=4 字节内联，否则按偏移取。
         2 => {
-            let total = cnt as usize;
-            // cnt==0 畸形（ASCII 至少含 NUL）；total 超上界则丢弃，
-            // 防止 max_tags 条目各自分配大字符串造成聚合放大。
-            // 注：完整的 max_total_alloc 预算化留待后续硬化/模糊测试计划。
-            if total == 0 || total > max_value_bytes {
-                return None;
-            }
-            let bytes: &[u8] = if total <= 4 {
-                &valoff[..total]
-            } else {
-                let off = match e {
-                    Endian::Little => {
-                        u32::from_le_bytes([valoff[0], valoff[1], valoff[2], valoff[3]])
-                    }
-                    Endian::Big => {
-                        u32::from_be_bytes([valoff[0], valoff[1], valoff[2], valoff[3]])
-                    }
-                } as usize;
-                let end = off.checked_add(total)?;
-                tiff.get(off..end)?
-            };
-            let nul = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-            let s = core::str::from_utf8(&bytes[..nul]).ok()?;
+            let nul = data.iter().position(|&b| b == 0).unwrap_or(data.len());
+            let s = core::str::from_utf8(&data[..nul]).ok()?;
             Some(Value::Text(String::from(s)))
+        }
+        1 | 7 => Some(Value::Bytes(Vec::from(data))),
+        _ => {
+            let n = cnt as usize;
+            let mut items: Vec<Value> = Vec::with_capacity(n);
+            let mut cur = ByteCursor::new(data);
+            for _ in 0..n {
+                items.push(read_scalar(&mut cur, e, typ)?);
+            }
+            if n == 1 {
+                items.into_iter().next()
+            } else {
+                Some(Value::List(items))
+            }
+        }
+    }
+}
+
+/// 从游标读一个数值标量(SHORT/LONG/RATIONAL/SRATIONAL)。
+fn read_scalar(cur: &mut ByteCursor, e: Endian, typ: u16) -> Option<Value> {
+    match typ {
+        3 => Some(Value::U16(cur.u16(e)?)),
+        4 => Some(Value::U32(cur.u32(e)?)),
+        5 => {
+            let num = cur.u32(e)?;
+            let den = cur.u32(e)?;
+            Some(Value::Rational(num, den))
+        }
+        10 => {
+            let num = cur.u32(e)? as i32;
+            let den = cur.u32(e)? as i32;
+            Some(Value::SRational(num, den))
         }
         _ => None,
     }
@@ -268,5 +306,85 @@ mod tests {
         assert!(out.is_empty());
         assert_eq!(warns.len(), 1);
         assert_eq!(warns[0].kind, WarnKind::BadExifHeader);
+    }
+
+    /// 构造小端单条目 IFD0 TIFF：外部数据(若有)紧跟 next-IFD 之后,起始偏移 26。
+    fn tiff_one(tag: u16, typ: u16, cnt: u32, valoff: [u8; 4], external: &[u8]) -> Vec<u8> {
+        let mut t: Vec<u8> = Vec::new();
+        t.extend_from_slice(b"II"); // 0..2
+        t.extend_from_slice(&42u16.to_le_bytes()); // 2..4
+        t.extend_from_slice(&8u32.to_le_bytes()); // 4..8 IFD0 偏移
+        t.extend_from_slice(&1u16.to_le_bytes()); // 8..10 count=1
+        t.extend_from_slice(&tag.to_le_bytes()); // 10..12
+        t.extend_from_slice(&typ.to_le_bytes()); // 12..14
+        t.extend_from_slice(&cnt.to_le_bytes()); // 14..18
+        t.extend_from_slice(&valoff); // 18..22
+        t.extend_from_slice(&0u32.to_le_bytes()); // 22..26 next=0
+        debug_assert_eq!(t.len(), 26);
+        t.extend_from_slice(external); // @26
+        t
+    }
+
+    fn decode_one(t: &[u8]) -> (Vec<ExifTag>, Vec<Warning>) {
+        let mut out = Vec::new();
+        let mut warns = Vec::new();
+        decode(t, &mut out, &mut warns, &Limits::default());
+        (out, warns)
+    }
+
+    #[test]
+    fn reads_rational_external() {
+        let mut ext = Vec::new();
+        ext.extend_from_slice(&4u32.to_le_bytes()); // num
+        ext.extend_from_slice(&1u32.to_le_bytes()); // den
+        let t = tiff_one(0x829D, 5, 1, 26u32.to_le_bytes(), &ext);
+        let (out, warns) = decode_one(&t);
+        assert!(warns.is_empty(), "warns: {:?}", warns);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].value, Value::Rational(4, 1));
+        assert_eq!(out[0].ifd, IfdKind::Primary);
+    }
+
+    #[test]
+    fn reads_long_inline() {
+        let t = tiff_one(0x0111, 4, 1, 1234u32.to_le_bytes(), &[]);
+        let (out, _) = decode_one(&t);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].value, Value::U32(1234));
+    }
+
+    #[test]
+    fn reads_srational_external() {
+        let mut ext = Vec::new();
+        ext.extend_from_slice(&(-3i32).to_le_bytes());
+        ext.extend_from_slice(&2i32.to_le_bytes());
+        let t = tiff_one(0x9204, 10, 1, 26u32.to_le_bytes(), &ext);
+        let (out, _) = decode_one(&t);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].value, Value::SRational(-3, 2));
+    }
+
+    #[test]
+    fn reads_undefined_as_bytes() {
+        let t = tiff_one(0x9000, 7, 4, *b"0230", &[]);
+        let (out, _) = decode_one(&t);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].value, Value::Bytes(Vec::from(b"0230".as_slice())));
+    }
+
+    #[test]
+    fn reads_short_array_as_list() {
+        let t = tiff_one(0x0212, 3, 2, [2, 0, 3, 0], &[]);
+        let (out, _) = decode_one(&t);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].value, Value::List(Vec::from([Value::U16(2), Value::U16(3)])));
+    }
+
+    #[test]
+    fn unknown_type_drops_tag() {
+        let t = tiff_one(0x0100, 99, 1, [0, 0, 0, 0], &[]);
+        let (out, warns) = decode_one(&t);
+        assert!(out.is_empty());
+        assert!(warns.is_empty());
     }
 }
