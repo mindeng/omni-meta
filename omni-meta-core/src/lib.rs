@@ -7,6 +7,7 @@ extern crate alloc;
 // 避免内部路径（如 omni_meta::driver::drive_slice）固化成 semver 稳定面。
 pub(crate) mod adapters;
 pub(crate) mod codecs;
+pub(crate) mod containers;
 pub(crate) mod formats;
 pub(crate) mod cursor;
 pub(crate) mod demand;
