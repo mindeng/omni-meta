@@ -1,6 +1,6 @@
 # omni-meta Roadmap
 
-**活文档** · 最近更新 2026-06-15 · 维护者随进度勾选
+**活文档** · 最近更新 2026-06-15（A1+A2 完成）· 维护者随进度勾选
 基准设计：[`docs/superpowers/specs/2026-06-14-omni-meta-design.md`](superpowers/specs/2026-06-14-omni-meta-design.md)
 
 > 本文档替代原设计 §11 的线性 phase 表——实际推进中适配器被提前完成、各纵切片
@@ -26,18 +26,21 @@
 | 格式：WebP | VP8X/VP8/VP8L 维度 + EXIF + XMP | `4cf39f4` |
 | 格式：GIF | LSD 维度 + XMP 应用扩展 | `7caf63e` |
 | normalize | raw→Unified 投影（仅 Primary IFD）、容器维度优先、XMP 回退 | `d7d279f` `619df68` |
+| **容器：ISO-BMFF (A1)** | `read_box_header`/`full_box_vf`/`iter_child_boxes` box 结构层（显式迭代、边界安全）；`ftyp` brand→`FileFormat::{Heif,Avif,Mp4,Mov}` 探测 | `e1bc699` `8682600` |
+| **格式：HEIF/AVIF (A2)** | `meta` 下钻 `iinf`/`iloc`→EXIF/XMP item（construction_method 0=mdat 绝对偏移 SeekTo / 1=idat 内联）、`ispe` 维度（`pitm`/`ipma` + 单 ispe 兜底），复用现有 EXIF/XMP codec；method2/越界/截断→警告不 panic | `d8cd745` |
 | **适配器（4 条）** | `read_slice` / `push` / `read_blocking` / `read_seek` | — |
-| 测试基座 | 四适配器差分一致性 + 各 codec/格式单测 | `535fb90` `d4f5b42` |
+| 测试基座 | 四适配器差分一致性（含完整 HEIC meta+mdat 的 SeekTo 抽取）+ 各 codec/格式单测 | `535fb90` `d4f5b42` `d4dccd4` |
 
 ### 当前 Unified 字段
 
 `width` · `height` · `orientation` · `camera_make` · `camera_model`（均 `Option`）
 > 受控增长原则：每个新字段需 **≥2 种格式来源**才纳入。
+> A2 起 `width`/`height` 增 HEIF/AVIF `ispe` 来源（第 5 个格式来源）。
 
 ### 尚未开始 ⬜
 
-IPTC codec · ICC 摘要 · ISO-BMFF 容器（HEIF/AVIF/MP4/MOV）· EBML 容器（MKV/WebM）·
-TIFF 顶层格式 · async/tokio 适配器 · Stripper（剥离）· 时间/GPS/时长等 Unified 字段扩展
+IPTC codec · ICC 摘要 · **ISO-BMFF MP4/MOV `moov`（维度/时长/创建时间 = A3；HEIF/AVIF meta 已完成）** ·
+EBML 容器（MKV/WebM）· TIFF 顶层格式 · async/tokio 适配器 · Stripper（剥离）· 时间/GPS/时长等 Unified 字段扩展
 
 ---
 
@@ -74,17 +77,25 @@ TIFF 顶层格式 · async/tokio 适配器 · Stripper（剥离）· 时间/GPS/
 
 每个里程碑都是**可独立测试、可合并的纵切片**，完成时跑四适配器差分 + 单测 + no_std 构建。
 
-### 里程碑 A — ISO-BMFF 容器（HEIF/AVIF/MP4/MOV）　【推荐下一站】
+### 里程碑 A — ISO-BMFF 容器（HEIF/AVIF/MP4/MOV）
 
 **为什么先做**：一个共享 box 读取器解锁 4 个高价值现代格式；是 sans-io seek 降级设计中
 唯一真正考验"向前到达 `moov`/`meta`"的场景，早做早暴露 Driver 缺陷。
 
-- [ ] `containers/isobmff.rs`：显式栈迭代 box 遍历（非递归），`max_depth` 上界，`checked_*` 偏移
-- [ ] `ftyp` brand 探测接入 `probe`（`heic`/`avif`/`mp4`/`mov`/`isom`…）→ 扩展 `FileFormat`
-- [ ] HEIF/AVIF：`meta` box 内 `iinf`/`iloc` 定位 EXIF / XMP item → 复用现有 EXIF/XMP codec
-- [ ] MP4/MOV：`moov` 维度 + 时长 + 创建时间 → `Event::Field`
-- [ ] 新增 Unified 字段评估：`duration`（视频）、`created`（BMFF + EXIF 两来源，满足 ≥2）
-- [ ] 四适配器差分 + box 嵌套/截断/越界 fuzz 样本
+**A1（基座，✅ 完成）** — 计划 `plans/2026-06-15-omni-meta-bmff-foundation.md`
+- [x] `containers/isobmff.rs`：显式迭代 box 遍历（非递归，`iter_child_boxes`），`checked_*` 偏移、边界安全
+- [x] `ftyp` brand 探测接入 `probe`（`heic`/`avif`/`mp4`/`mov`/`isom`…）→ 扩展 `FileFormat`
+
+**A2（HEIF/AVIF meta 抽取，✅ 完成）** — 设计 `specs/2026-06-15-omni-meta-bmff-heif-meta-design.md` / 计划 `plans/2026-06-15-omni-meta-bmff-heif-meta.md`
+- [x] HEIF/AVIF：`meta` box 内 `iinf`/`iloc` 定位 EXIF / XMP item → 复用现有 EXIF/XMP codec（method 0=mdat / 1=idat）
+- [x] `ispe` 维度（`pitm`/`ipma` 关联 + 单 ispe 兜底）→ `Event::Field`（`width`/`height` 第 5 来源）
+- [x] 两阶段 `BmffParser`（Walk 找 meta → Extract `SeekTo` 抽取）+ 两处 Driver 守卫修复（空窗口=EOF、相邻零间隔 SeekTo）
+- [x] 四适配器差分（完整 HEIC meta+mdat）+ 截断/越界/method2 警告路径单测
+
+**A3（MP4/MOV moov，⬜ 下一站）**
+- [ ] MP4/MOV：`moov` 维度 + 时长 + 创建时间 → `Event::Field`（`tkhd`/`mvhd`）
+- [ ] 新增 Unified 字段评估：`duration`（视频）、`created`（BMFF moov + EXIF 两来源，满足 ≥2）+ 时间归一（EXIF 本地无时区 vs BMFF 1904 UTC 秒）
+- [ ] box 嵌套/截断/越界 fuzz 样本（`cargo-fuzz`）
 
 ### 里程碑 B — IPTC-IIM codec（可提前，见 §2）
 
