@@ -441,3 +441,23 @@ fn differential_gps_list() {
 fn differential_thumbnail_ifd() {
     assert_all_equal(&wrap_jpeg_tiff(&make_tiff_thumbnail()));
 }
+
+/// 最小 BMFF：ftyp(heic) + 一个尾随 free box（A1 全部忽略）。
+fn fixture_bmff_heic() -> Vec<u8> {
+    let mut f = Vec::new();
+    // ftyp box: size=20
+    f.extend_from_slice(&20u32.to_be_bytes());
+    f.extend_from_slice(b"ftyp");
+    f.extend_from_slice(b"heic");
+    f.extend_from_slice(&0u32.to_be_bytes());
+    f.extend_from_slice(b"mif1");
+    // free box: size=8（仅头部）
+    f.extend_from_slice(&8u32.to_be_bytes());
+    f.extend_from_slice(b"free");
+    f
+}
+
+#[test]
+fn differential_bmff_heic() {
+    assert_all_equal(&fixture_bmff_heic());
+}
