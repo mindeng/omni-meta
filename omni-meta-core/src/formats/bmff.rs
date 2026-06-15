@@ -285,7 +285,7 @@ fn dims_from_iprp(iprp_payload: &[u8], primary: Option<u32>) -> Option<(u32, u32
 }
 
 /// 一个 method-0 抽取目标（数据在文件别处，需 SeekTo）。
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct Target {
     offset: u64,
     length: u64,
@@ -389,6 +389,14 @@ fn parse_meta(meta_payload: &[u8], meta_abs_base: u64) -> MetaPlan<'_> {
 #[derive(Debug, Default)]
 pub struct BmffParser {
     done: bool,
+    /// Walk 阶段已走过的绝对偏移（当前待读 box 的起点），仅用于警告偏移保真。
+    pos: u64,
+    /// 是否已解析完 meta、进入 Extract 阶段。
+    extracting: bool,
+    /// Extract 阶段当前目标下标。
+    idx: usize,
+    /// method-0 目标，按 offset 升序。
+    targets: Vec<Target>,
 }
 
 impl BmffParser {
@@ -397,32 +405,128 @@ impl BmffParser {
     }
 }
 
+/// 读首个 box 头所需字节：size==1（largesize）需 16，否则 8。
+fn needed_header_bytes(input: &[u8]) -> usize {
+    if input.len() >= 4 && u32::from_be_bytes([input[0], input[1], input[2], input[3]]) == 1 {
+        16
+    } else {
+        8
+    }
+}
+
 impl MetaParser for BmffParser {
     fn pull<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
-        let events: Vec<Event<'a>> = Vec::new();
         if self.done {
-            return PullResult { demand: Demand::Done, consumed: 0, events };
+            return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
         }
-        // 读首个 box 头需 ≥8 字节（largesize 也只需头部，不读 ftyp 载荷）。
+        if self.extracting {
+            return self.pull_extract(input);
+        }
+        self.pull_walk(input)
+    }
+}
+
+impl BmffParser {
+    /// 顶层走盒：跳过非 meta box，命中 meta 后整盒入窗并解析。
+    /// 空窗口（由驱动保证仅在 EOF 出现）= 干净结束。
+    fn pull_walk<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
+        if input.is_empty() {
+            self.done = true;
+            return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+        }
         let hdr = match read_box_header(input) {
             Some(h) => h,
             None => {
-                // size==1 标记 largesize：头部需 16 字节，否则基本头 8 字节。
-                let need = if input.len() >= 4
-                    && u32::from_be_bytes([input[0], input[1], input[2], input[3]]) == 1
-                {
-                    16
-                } else {
-                    8
+                return PullResult {
+                    demand: Demand::NeedBytes(needed_header_bytes(input)),
+                    consumed: 0,
+                    events: Vec::new(),
                 };
-                return PullResult { demand: Demand::NeedBytes(need), consumed: 0, events };
             }
         };
-        // probe 已确保首盒为 ftyp（hdr 仅用于确认头部可完整读出）。
-        // A1 不抽取元数据，读到首盒头即完成；box 链续走留给 A2/A3。
-        let _ = hdr.kind;
-        self.done = true;
-        PullResult { demand: Demand::Done, consumed: 0, events }
+        if &hdr.kind == b"meta" {
+            let total = match hdr.total_size {
+                Some(t) => t,
+                None => {
+                    // size0 meta（延伸至 EOF）：本里程碑不处理，干净结束。
+                    self.done = true;
+                    return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+                }
+            };
+            let need = match usize::try_from(total) {
+                Ok(n) => n,
+                Err(_) => {
+                    self.done = true;
+                    return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+                }
+            };
+            let header_len = hdr.header_len as usize;
+            if need < header_len {
+                // 畸形 meta：声明大小小于其自身头部 → 干净结束，绝不 panic。
+                self.done = true;
+                return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+            }
+            if input.len() < need {
+                return PullResult { demand: Demand::NeedBytes(need), consumed: 0, events: Vec::new() };
+            }
+            let plan = parse_meta(&input[header_len..need], self.pos);
+            let mut events: Vec<Event<'a>> = Vec::new();
+            if let Some((w, h)) = plan.dims {
+                events.push(Event::Field(Field::Width(w)));
+                events.push(Event::Field(Field::Height(h)));
+            }
+            for (kind, data) in plan.inline {
+                events.push(Event::Payload { kind, data });
+            }
+            for warn in plan.warnings {
+                events.push(Event::Warning(warn));
+            }
+            self.targets = plan.targets;
+            if self.targets.is_empty() {
+                self.done = true;
+                return PullResult { demand: Demand::Done, consumed: need, events };
+            }
+            self.extracting = true;
+            self.idx = 0;
+            let first = self.targets[0].offset;
+            return PullResult { demand: Demand::SeekTo(first), consumed: need, events };
+        }
+        // 非 meta：跳过整盒。size0 / 畸形（payload_len None）→ 不可能再有 meta，干净结束。
+        match hdr.payload_len() {
+            Some(pl) => {
+                self.pos = self.pos.saturating_add(hdr.header_len).saturating_add(pl);
+                PullResult { demand: Demand::Skip(pl), consumed: hdr.header_len as usize, events: Vec::new() }
+            }
+            None => {
+                self.done = true;
+                PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() }
+            }
+        }
+    }
+
+    /// Extract 阶段：窗口起点 = 当前目标的绝对偏移（驱动已 SeekTo）。
+    fn pull_extract<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
+        let t = self.targets[self.idx];
+        let len = match usize::try_from(t.length) {
+            Ok(l) => l,
+            Err(_) => {
+                self.done = true;
+                return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+            }
+        };
+        if input.len() < len {
+            return PullResult { demand: Demand::NeedBytes(len), consumed: 0, events: Vec::new() };
+        }
+        let raw = &input[..len];
+        let data = if t.strip_exif { strip_exif_prefix(raw) } else { raw };
+        let events: Vec<Event<'a>> = alloc::vec![Event::Payload { kind: t.kind, data }];
+        self.idx += 1;
+        if self.idx >= self.targets.len() {
+            self.done = true;
+            return PullResult { demand: Demand::Done, consumed: len, events };
+        }
+        let next = self.targets[self.idx].offset;
+        PullResult { demand: Demand::SeekTo(next), consumed: len, events }
     }
 }
 
@@ -441,12 +545,33 @@ mod tests {
     }
 
     #[test]
-    fn ftyp_then_done_no_events() {
+    fn walk_skips_non_meta_box() {
+        // 单次 pull：首盒 ftyp 非 meta → Skip(载荷=12)，消费头部 8。
         let buf = ftyp_box();
         let mut p = BmffParser::new();
         let res = p.pull(&buf);
+        assert_eq!(res.demand, Demand::Skip(12));
+        assert_eq!(res.consumed, 8);
+        assert!(res.events.is_empty());
+    }
+
+    #[test]
+    fn walk_empty_window_is_clean_done() {
+        // 空窗口（驱动保证仅 EOF 出现）→ 干净 Done、无事件。
+        let mut p = BmffParser::new();
+        let res = p.pull(&[]);
         assert_eq!(res.demand, Demand::Done);
         assert!(res.events.is_empty());
+    }
+
+    #[test]
+    fn drive_slice_lone_ftyp_is_clean() {
+        // 仅 ftyp（无 meta）经 drive_slice 应干净收尾、无警告、无产物。
+        let buf = ftyp_box();
+        let col = crate::driver::drive_slice(&buf, &mut BmffParser::new(), crate::limits::Limits::default());
+        assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
+        assert!(col.exif.is_empty());
+        assert!(col.xmp.is_empty());
     }
 
     #[test]
@@ -469,15 +594,6 @@ mod tests {
         let res = p.pull(&b);
         assert_eq!(res.demand, Demand::NeedBytes(16));
         assert_eq!(res.consumed, 0);
-    }
-
-    #[test]
-    fn second_pull_after_done_stays_done() {
-        let buf = ftyp_box();
-        let mut p = BmffParser::new();
-        let _ = p.pull(&buf);
-        let res = p.pull(&buf);
-        assert_eq!(res.demand, Demand::Done);
     }
 
     fn box_bytes(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
@@ -614,6 +730,19 @@ mod tests {
         let mut d = alloc::vec![0u8, 0, 0, 0];
         d.extend_from_slice(b"Exif\0\0MM\0*");
         assert_eq!(strip_exif_prefix(&d), b"MM\0*");
+    }
+
+    #[test]
+    fn walk_meta_smaller_than_header_is_clean_done() {
+        // 畸形 meta：size32=6 < 头部 8。绝不 panic，干净结束。
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&6u32.to_be_bytes());
+        buf.extend_from_slice(b"meta");
+        buf.extend_from_slice(&[0u8; 8]); // 填充使 input >= 8
+        let mut p = BmffParser::new();
+        let res = p.pull(&buf);
+        assert_eq!(res.demand, Demand::Done);
+        assert!(res.events.is_empty());
     }
 
     #[test]

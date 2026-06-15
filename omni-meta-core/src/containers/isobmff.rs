@@ -16,8 +16,7 @@ pub struct BoxHeader {
 
 impl BoxHeader {
     /// 载荷字节数 = total_size − header_len；size==0 时未知，返回 None。
-    /// A2/A3 box 链续走时使用；当前 A1 仅测试覆盖，故抑制未使用警告。
-    #[allow(dead_code)]
+    /// BMFF walk 非 meta 路径（`pull_walk`）用于跳过整盒。
     pub fn payload_len(&self) -> Option<u64> {
         self.total_size.and_then(|t| t.checked_sub(self.header_len))
     }
