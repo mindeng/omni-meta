@@ -304,8 +304,13 @@ fn parse_infe(payload: &[u8]) -> Option<Wanted> {
         return Some(Wanted { id, kind: PayloadKind::Exif });
     }
     if item_type == b"mime" {
+        // ItemInfoEntry v2/3：item_name(null 终止) 在 item_type 之后、content_type 之前。
         let rest = &payload[cur.position()..];
-        if take_cstr(rest) == b"application/rdf+xml" {
+        let after_name = match rest.iter().position(|&c| c == 0) {
+            Some(i) => i + 1,
+            None => return None,
+        };
+        if take_cstr(&rest[after_name..]) == b"application/rdf+xml" {
             return Some(Wanted { id, kind: PayloadKind::Xmp });
         }
     }
@@ -368,6 +373,7 @@ fn parse_iinf(payload: &[u8]) -> Vec<Wanted> {
         p.extend_from_slice(&id.to_be_bytes());
         p.extend_from_slice(&0u16.to_be_bytes()); // protection index
         p.extend_from_slice(typ);
+        p.push(0); // item_name = "" (spec 要求 v2/3 存在)
         if let Some(ct) = content_type {
             p.extend_from_slice(ct);
             p.push(0);
@@ -1321,6 +1327,7 @@ fn bmff_infe(id: u16, typ: &[u8; 4], content_type: Option<&[u8]>) -> Vec<u8> {
     p.extend_from_slice(&id.to_be_bytes());
     p.extend_from_slice(&0u16.to_be_bytes());
     p.extend_from_slice(typ);
+    p.push(0); // item_name = "" (spec 要求 v2/3 存在)
     if let Some(ct) = content_type {
         p.extend_from_slice(ct);
         p.push(0);
