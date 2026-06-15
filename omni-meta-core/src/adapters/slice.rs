@@ -4,8 +4,7 @@ use crate::driver::drive_slice;
 use crate::error::Error;
 use crate::formats::jpeg::JpegParser;
 use crate::limits::Limits;
-use crate::model::{FileFormat, Metadata, RawTags};
-use crate::normalize::normalize;
+use crate::model::{FileFormat, Metadata};
 use crate::probe::probe;
 
 /// 解析选项。
@@ -20,16 +19,7 @@ pub fn read_slice(buf: &[u8], opts: Options) -> Result<Metadata, Error> {
         FileFormat::Jpeg => {
             let mut parser = JpegParser::new();
             let col = drive_slice(buf, &mut parser, opts.limits);
-            let raw = RawTags { exif: col.exif };
-            // normalize 可能追加 UnrecognizedValue 警告，故复用 driver 收集的警告向量。
-            let mut warnings = col.warnings;
-            let unified = normalize(&raw, &mut warnings);
-            Ok(Metadata {
-                unified,
-                raw,
-                warnings,
-                format: FileFormat::Jpeg,
-            })
+            Ok(crate::driver::finalize(col, FileFormat::Jpeg))
         }
         FileFormat::Unknown => Err(Error::UnrecognizedFormat),
     }
