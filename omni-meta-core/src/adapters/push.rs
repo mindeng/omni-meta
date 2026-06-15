@@ -1,17 +1,15 @@
 //! read_push：调用者掌握主动权的 push 适配器（no_std 亦可用）。
 
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use crate::adapters::slice::Options;
 use crate::driver::{finalize, Outcome, StreamDriver};
 use crate::error::Error;
-use crate::formats::jpeg::JpegParser;
 use crate::model::{FileFormat, Metadata};
-use crate::probe::probe;
+use crate::probe::{parser_for, probe, PROBE_MAX};
 
 /// push 适配器：调用者反复 `feed` 字节、按 `Outcome` 决定下一步，最后 `finish`。
-/// 探测格式需要前 2 字节；在凑齐前 `feed` 累积到内部预缓冲。
+/// 探测格式需要前 PROBE_MAX 字节；在凑齐前 `feed` 累积到内部预缓冲。
 pub struct PushParser {
     limits_opts: Options,
     pre: Vec<u8>,
@@ -19,8 +17,6 @@ pub struct PushParser {
     format: FileFormat,
     failed: bool,
 }
-
-const PROBE_MIN: usize = 2;
 
 impl PushParser {
     pub fn new(opts: Options) -> Self {
@@ -42,12 +38,16 @@ impl PushParser {
         if let Some(d) = self.driver.as_mut() {
             return Ok(d.feed(chunk));
         }
-        // 仍在探测前：累积。
         self.pre.extend_from_slice(chunk);
-        if self.pre.len() < PROBE_MIN {
-            return Ok(Outcome::Need(PROBE_MIN - self.pre.len()));
+        let fmt = probe(&self.pre);
+        if fmt == FileFormat::Unknown {
+            if self.pre.len() >= PROBE_MAX {
+                self.failed = true;
+                return Err(Error::UnrecognizedFormat);
+            }
+            return Ok(Outcome::Need(PROBE_MAX - self.pre.len()));
         }
-        self.start_driver()
+        self.start_driver(fmt)
     }
 
     /// 调用者已自行向前跳 n 字节后，推进解析器逻辑位置。
@@ -63,8 +63,8 @@ impl PushParser {
             return Err(Error::UnrecognizedFormat);
         }
         if self.driver.is_none() {
-            // EOF 前未凑够/未识别：用现有 pre 末次探测。
-            let _ = self.start_driver();
+            let fmt = probe(&self.pre);
+            let _ = self.start_driver(fmt);
             if self.failed || self.driver.is_none() {
                 return Err(Error::UnrecognizedFormat);
             }
@@ -74,18 +74,18 @@ impl PushParser {
         Ok(finalize(col, self.format))
     }
 
-    /// 用已累积的 `pre` 探测并建驱动；不可识别则置 failed。
-    fn start_driver(&mut self) -> Result<Outcome, Error> {
-        match probe(&self.pre) {
-            FileFormat::Jpeg => {
-                self.format = FileFormat::Jpeg;
-                let mut d = StreamDriver::new(Box::new(JpegParser::new()), self.limits_opts.limits);
+    /// 用已探测格式建驱动；不可识别则置 failed。
+    fn start_driver(&mut self, fmt: FileFormat) -> Result<Outcome, Error> {
+        match parser_for(fmt.clone()) {
+            Some(parser) => {
+                self.format = fmt;
+                let mut d = StreamDriver::new(parser, self.limits_opts.limits);
                 let pre = core::mem::take(&mut self.pre);
                 let outcome = d.feed(&pre);
                 self.driver = Some(d);
                 Ok(outcome)
             }
-            FileFormat::Unknown | FileFormat::Png | FileFormat::Webp | FileFormat::Gif => {
+            None => {
                 self.failed = true;
                 Err(Error::UnrecognizedFormat)
             }
