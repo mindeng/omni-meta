@@ -326,3 +326,48 @@ fn fixture_png_compressed_itxt() -> Vec<u8> {
 fn differential_png_compressed_itxt() {
     assert_all_equal(&fixture_png_compressed_itxt());
 }
+
+fn make_tiff_subifd() -> Vec<u8> {
+    let mut t: Vec<u8> = Vec::new();
+    t.extend_from_slice(b"II");
+    t.extend_from_slice(&42u16.to_le_bytes());
+    t.extend_from_slice(&8u32.to_le_bytes());
+    // IFD0 @8: 仅一个 Exif 指针
+    t.extend_from_slice(&1u16.to_le_bytes());
+    t.extend_from_slice(&0x8769u16.to_le_bytes());
+    t.extend_from_slice(&4u16.to_le_bytes());
+    t.extend_from_slice(&1u32.to_le_bytes());
+    t.extend_from_slice(&26u32.to_le_bytes());
+    t.extend_from_slice(&0u32.to_le_bytes());
+    // Exif IFD @26: FNumber RATIONAL cnt1 @44
+    t.extend_from_slice(&1u16.to_le_bytes());
+    t.extend_from_slice(&0x829Du16.to_le_bytes());
+    t.extend_from_slice(&5u16.to_le_bytes());
+    t.extend_from_slice(&1u32.to_le_bytes());
+    t.extend_from_slice(&44u32.to_le_bytes());
+    t.extend_from_slice(&0u32.to_le_bytes());
+    // @44 数据
+    t.extend_from_slice(&4u32.to_le_bytes());
+    t.extend_from_slice(&1u32.to_le_bytes());
+    t
+}
+
+fn fixture_exif_subifd() -> Vec<u8> {
+    let tiff = make_tiff_subifd();
+    let mut body: Vec<u8> = Vec::new();
+    body.extend_from_slice(b"Exif\0\0");
+    body.extend_from_slice(&tiff);
+    let len = (body.len() + 2) as u16;
+    let mut j: Vec<u8> = Vec::new();
+    j.extend_from_slice(&[0xFF, 0xD8]); // SOI
+    j.extend_from_slice(&[0xFF, 0xE1]); // APP1
+    j.extend_from_slice(&len.to_be_bytes());
+    j.extend_from_slice(&body);
+    j.extend_from_slice(&[0xFF, 0xD9]); // EOI
+    j
+}
+
+#[test]
+fn differential_exif_subifd() {
+    assert_all_equal(&fixture_exif_subifd());
+}
