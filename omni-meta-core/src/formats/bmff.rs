@@ -284,6 +284,108 @@ fn dims_from_iprp(iprp_payload: &[u8], primary: Option<u32>) -> Option<(u32, u32
     }
 }
 
+/// 一个 method-0 抽取目标（数据在文件别处，需 SeekTo）。
+#[derive(Clone, Copy)]
+struct Target {
+    offset: u64,
+    length: u64,
+    kind: PayloadKind,
+    strip_exif: bool,
+}
+
+/// meta 解析产物。
+struct MetaPlan<'a> {
+    dims: Option<(u32, u32)>,
+    /// method-1（idat 内联）载荷：已切片、EXIF 已剥前缀。
+    inline: Vec<(PayloadKind, &'a [u8])>,
+    /// method-0 目标，按 offset 升序。
+    targets: Vec<Target>,
+    warnings: Vec<Warning>,
+}
+
+/// Exif item 数据 = 4 字节 BE tiff_header_offset N，TIFF 自 4+N 起；容错 "Exif\0\0"。
+fn strip_exif_prefix(d: &[u8]) -> &[u8] {
+    if d.len() < 4 {
+        return d;
+    }
+    let n = u32::from_be_bytes([d[0], d[1], d[2], d[3]]) as usize;
+    let start = 4usize.saturating_add(n);
+    let rest = d.get(start..).unwrap_or(&[]);
+    rest.strip_prefix(b"Exif\0\0").unwrap_or(rest)
+}
+
+/// 解析 meta box 载荷（meta 自身是 FullBox）。`meta_abs_base` 为 meta box 在文件中的绝对起点
+/// （仅用于警告偏移）。
+fn parse_meta(meta_payload: &[u8], meta_abs_base: u64) -> MetaPlan<'_> {
+    let mut plan = MetaPlan { dims: None, inline: Vec::new(), targets: Vec::new(), warnings: Vec::new() };
+    if full_box_vf(meta_payload).is_none() {
+        return plan;
+    }
+    let children = &meta_payload[4..];
+    let mut items: Vec<Wanted> = Vec::new();
+    let mut locs: Vec<Loc> = Vec::new();
+    let mut idat: Option<&[u8]> = None;
+    let mut primary: Option<u32> = None;
+    let mut iprp: Option<&[u8]> = None;
+    for (hdr, p) in iter_child_boxes(children) {
+        match &hdr.kind {
+            b"iinf" => items = parse_iinf(p),
+            b"iloc" => locs = parse_iloc(p),
+            b"idat" => idat = Some(p),
+            b"pitm" => primary = parse_pitm(p),
+            b"iprp" => iprp = Some(p),
+            _ => {}
+        }
+    }
+    if let Some(iprp) = iprp {
+        plan.dims = dims_from_iprp(iprp, primary);
+    }
+    for w in &items {
+        let loc = match locs.iter().find(|l| l.id == w.id) {
+            Some(l) => l,
+            None => continue,
+        };
+        if loc.extent_count != 1 {
+            // 多 extent（需拼接）暂不支持
+            plan.warnings.push(Warning { offset: meta_abs_base, kind: WarnKind::UnreachableSection });
+            continue;
+        }
+        let (off, len) = match loc.first_extent {
+            Some(e) => e,
+            None => continue,
+        };
+        match loc.method {
+            0 => plan.targets.push(Target {
+                offset: off,
+                length: len,
+                kind: w.kind,
+                strip_exif: w.kind == PayloadKind::Exif,
+            }),
+            1 => {
+                let data = idat.and_then(|d| {
+                    let start = usize::try_from(off).ok()?;
+                    let end = start.checked_add(usize::try_from(len).ok()?)?;
+                    d.get(start..end)
+                });
+                match data {
+                    Some(d) => {
+                        let payload = if w.kind == PayloadKind::Exif { strip_exif_prefix(d) } else { d };
+                        plan.inline.push((w.kind, payload));
+                    }
+                    None => plan
+                        .warnings
+                        .push(Warning { offset: meta_abs_base, kind: WarnKind::UnreachableSection }),
+                }
+            }
+            _ => plan
+                .warnings
+                .push(Warning { offset: meta_abs_base, kind: WarnKind::UnreachableSection }),
+        }
+    }
+    plan.targets.sort_by_key(|t| t.offset);
+    plan
+}
+
 #[derive(Debug, Default)]
 pub struct BmffParser {
     done: bool,
@@ -498,5 +600,47 @@ mod tests {
         // 无 ipma 关联，但 ipco 仅一个 ispe → 兜底直接用
         let ipco = box_bytes(b"ipco", &ispe(640, 480));
         assert_eq!(dims_from_iprp(&box_bytes(b"iprp", &ipco)[8..], None), Some((640, 480)));
+    }
+
+    #[test]
+    fn strip_exif_prefix_zero_offset() {
+        let mut d = alloc::vec![0u8, 0, 0, 0]; // tiff_header_offset = 0
+        d.extend_from_slice(b"II*\0rest");
+        assert_eq!(strip_exif_prefix(&d), b"II*\0rest");
+    }
+
+    #[test]
+    fn strip_exif_prefix_tolerates_exif_marker() {
+        let mut d = alloc::vec![0u8, 0, 0, 0];
+        d.extend_from_slice(b"Exif\0\0MM\0*");
+        assert_eq!(strip_exif_prefix(&d), b"MM\0*");
+    }
+
+    #[test]
+    fn parse_meta_method2_warns_and_skips() {
+        // iinf: Exif item id=1；iloc version1 method=2（item 间接引用，不支持）
+        let mut iinf_p = alloc::vec![0u8, 0, 0, 0];
+        iinf_p.extend_from_slice(&1u16.to_be_bytes());
+        iinf_p.extend_from_slice(&infe(1, b"Exif", None));
+        let iinf = box_bytes(b"iinf", &iinf_p);
+        let mut iloc_p = alloc::vec![1u8, 0, 0, 0]; // version 1
+        iloc_p.push(0x44);
+        iloc_p.push(0x00);
+        iloc_p.extend_from_slice(&1u16.to_be_bytes()); // item_count
+        iloc_p.extend_from_slice(&1u16.to_be_bytes()); // id=1
+        iloc_p.extend_from_slice(&2u16.to_be_bytes()); // construction_method=2
+        iloc_p.extend_from_slice(&0u16.to_be_bytes()); // dri
+        iloc_p.extend_from_slice(&1u16.to_be_bytes()); // extent_count
+        iloc_p.extend_from_slice(&0u32.to_be_bytes()); // offset
+        iloc_p.extend_from_slice(&4u32.to_be_bytes()); // length
+        let iloc = box_bytes(b"iloc", &iloc_p);
+        let mut meta_p = alloc::vec![0u8, 0, 0, 0]; // meta vf
+        meta_p.extend_from_slice(&iinf);
+        meta_p.extend_from_slice(&iloc);
+        let plan = parse_meta(&meta_p, 0);
+        assert!(plan.targets.is_empty());
+        assert!(plan.inline.is_empty());
+        assert_eq!(plan.warnings.len(), 1);
+        assert_eq!(plan.warnings[0].kind, WarnKind::UnreachableSection);
     }
 }
