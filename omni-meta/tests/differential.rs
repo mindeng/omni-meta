@@ -298,3 +298,31 @@ fn fixture_gif() -> Vec<u8> {
 fn differential_gif() {
     assert_all_equal(&fixture_gif());
 }
+
+fn fixture_png_compressed_itxt() -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    // IHDR 4x4
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&4u32.to_be_bytes());
+    ihdr.extend_from_slice(&4u32.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    p.extend_from_slice(&png_chunk(b"IHDR", &ihdr));
+    // iTXt with keyword XML:com.adobe.xmp, compression flag = 1 (compressed → warn & skip)
+    let mut itxt = Vec::new();
+    itxt.extend_from_slice(b"XML:com.adobe.xmp");
+    itxt.push(0x00); // keyword NUL
+    itxt.push(0x01); // compression flag = 1
+    itxt.push(0x00); // compression method
+    itxt.push(0x00); // lang NUL
+    itxt.push(0x00); // translated-keyword NUL
+    itxt.extend_from_slice(b"fake-compressed-payload");
+    p.extend_from_slice(&png_chunk(b"iTXt", &itxt));
+    p.extend_from_slice(&png_chunk(b"IEND", &[]));
+    p
+}
+
+#[test]
+fn differential_png_compressed_itxt() {
+    assert_all_equal(&fixture_png_compressed_itxt());
+}

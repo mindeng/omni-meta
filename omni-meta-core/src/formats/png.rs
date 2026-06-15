@@ -81,7 +81,7 @@ impl MetaParser for PngParser {
                         events.push(Event::Payload { kind: PayloadKind::Exif, data });
                     }
                     b"iTXt" => {
-                        handle_itxt(data, pos, &mut events);
+                        handle_itxt(data, &mut events);
                     }
                     _ => {}
                 }
@@ -97,7 +97,7 @@ impl MetaParser for PngParser {
 }
 
 /// 解析 iTXt 数据；仅当 keyword 为 XMP 且未压缩时发 Xmp 载荷，压缩则告警。
-fn handle_itxt<'a>(data: &'a [u8], chunk_pos: usize, events: &mut Vec<Event<'a>>) {
+fn handle_itxt<'a>(data: &'a [u8], events: &mut Vec<Event<'a>>) {
     // keyword\0 compflag(1) compmethod(1) lang\0 transkw\0 text
     let kw_end = match data.iter().position(|&b| b == 0) {
         Some(p) => p,
@@ -113,7 +113,7 @@ fn handle_itxt<'a>(data: &'a [u8], chunk_pos: usize, events: &mut Vec<Event<'a>>
     let compressed = after_kw[0] != 0;
     if compressed {
         events.push(Event::Warning(Warning {
-            offset: chunk_pos as u64,
+            offset: 0,
             kind: WarnKind::CompressedChunkSkipped,
         }));
         return;

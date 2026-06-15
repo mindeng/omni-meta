@@ -14,6 +14,10 @@ pub fn decode(
     warnings: &mut Vec<Warning>,
     limits: &Limits,
 ) {
+    if packet.len() > limits.max_payload_bytes {
+        warnings.push(Warning { offset: 0, kind: WarnKind::Truncated });
+        return;
+    }
     let text = match core::str::from_utf8(packet) {
         Ok(t) => t,
         Err(_) => {
@@ -324,6 +328,21 @@ mod tests {
     fn truncated_tag_does_not_panic() {
         let (props, _warns) = run(b"<tiff:Make");
         assert!(props.is_empty());
+    }
+
+    #[test]
+    fn oversized_packet_rejected() {
+        let limits = Limits { max_payload_bytes: 16, ..Limits::default() };
+        // 构造一个合法 UTF-8 但超过 max_payload_bytes 的包
+        let pkt = b"<rdf:Description tiff:Make=\"Acme\"/>";
+        assert!(pkt.len() > 16);
+        let mut out = Vec::new();
+        let mut warns = Vec::new();
+        decode(pkt, &mut out, &mut warns, &limits);
+        assert!(out.is_empty(), "oversized packet must produce no props");
+        assert_eq!(warns.len(), 1);
+        assert_eq!(warns[0].kind, WarnKind::Truncated);
+        assert_eq!(warns[0].offset, 0);
     }
 
     #[test]
