@@ -32,7 +32,6 @@
 |---|---|---|
 | `containers/isobmff.rs` | 通用结构层（A3 `moov` 共用）：现有 `read_box_header` + 新增 `full_box_vf`（读 FullBox 的 version/flags）+ `iter_child_boxes`（安全遍历兄弟 box，越界即停的迭代器） | Modify |
 | `formats/bmff.rs` | HEIF 语义层：item 模型、解析 `meta` 子盒、构建抽取目标、`SeekTo` 抽取状态机 | Modify（A1 骨架扩写） |
-| `limits.rs` | 新增 `max_items`（封顶 `iinf`/`iloc` 条目数），默认 4096 | Modify |
 | `formats/bmff.rs` `mod tests` | 合成 HEIC fixture 单测（meta+mdat / idat / 截断 / 缺 meta / method2） | Modify |
 | `tests/differential.rs` | 完整 HEIC fixture 跑四适配器一致性 | Modify |
 
@@ -54,8 +53,8 @@
 
 ### 解析 `meta`（窗口含完整 meta box 时一次性执行）
 在 `isobmff::iter_child_boxes` 上遍历 meta 的子盒（meta 自身是 FullBox，先 `full_box_vf` 跳 4 字节 version/flags）：
-- **`iinf`**：FullBox。读 entry_count（`max_items` 封顶），逐 `infe`（version 2/3）取 `item_ID` + `item_type`(4cc) + （`mime` 时）content_type 字符串 → 建 `item_ID → (item_type, content_type?)`。
-- **`iloc`**：FullBox。读 offset/length/base_offset/index 字段位宽（version 0/1/2 语义），逐 item 取 `item_ID` + `construction_method` + extents `[(data_reference_index, extent_offset, extent_length)]`，叠加 `base_offset` → 绝对偏移。`max_items` 封顶。
+- **`iinf`**：FullBox。读 entry_count（仅作循环上界，迭代被载荷字节数限死），逐 `infe`（version 2/3）取 `item_ID` + `item_type`(4cc) + （`mime` 时）content_type 字符串 → 建 `item_ID → (item_type, content_type?)`。
+- **`iloc`**：FullBox。读 offset/length/base_offset/index 字段位宽（version 0/1/2 语义），逐 item 取 `item_ID` + `construction_method` + extents `[(data_reference_index, extent_offset, extent_length)]`，叠加 `base_offset` → 绝对偏移。
 - **`iprp` → `ipco`/`ipma`** + **`pitm`**：取主 item 维度。`ispe`（FullBox）载荷 = version/flags(4) + image_width(u32 BE) + image_height(u32 BE)。
   - 选择：`pitm` → 主 item_ID；`ipma` → 该 item 关联的属性序号（1-based，索引进 `ipco` 子盒有序列表）；取其中的 `ispe`。
   - 兜底：`pitm`/`ipma` 缺失或未关联到 ispe，但 `ipco` 恰好只有一个 `ispe` → 直接用（覆盖单图 HEIC/AVIF 常态）。
@@ -86,7 +85,7 @@
   - 截断的 meta / extent → driver `Truncated`。
   - 越界 extent、construction_method 2/未知 → `UnreachableSection` 警告，跳过该 item，其余照常抽取。
   - 畸形 box 头 / 子盒长度自洽性破坏 → `iter_child_boxes` 停止遍历，已抽取结果保留。
-  - `iinf`/`iloc` 条目数超 `max_items` → 截断到上限（与 EXIF `max_ifds` 同姿态）。
+- **DoS 边界**：整个 `meta` box 必须先缓冲才解析，受 `max_retained_bytes` 封顶（超限 → driver `UnreachableSection`）；`iinf`/`iloc` 的 entry_count 仅作循环上界，实际迭代被 box 载荷字节数（游标边界）限死——声明巨大 count 也只会在载荷耗尽时停止，分配不会超过盒体大小。故无需额外的 `max_items`（`parser_for` 不向格式解析器传 `Limits`，沿用此约定）。
 
 ---
 
