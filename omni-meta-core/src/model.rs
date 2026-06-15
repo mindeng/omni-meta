@@ -10,6 +10,10 @@ pub enum FileFormat {
     Png,
     Webp,
     Gif,
+    Heif,
+    Avif,
+    Mp4,
+    Mov,
     Unknown,
 }
 
@@ -168,6 +172,20 @@ mod tests {
     fn rawtags_has_empty_xmp_by_default() {
         let r = RawTags::default();
         assert!(r.xmp.is_empty());
+    }
+
+    #[test]
+    fn fileformat_has_bmff_family() {
+        // 四个 BMFF 家族变体可构造且互不相等。
+        let all = [
+            FileFormat::Heif,
+            FileFormat::Avif,
+            FileFormat::Mp4,
+            FileFormat::Mov,
+        ];
+        assert_eq!(all[0], FileFormat::Heif);
+        assert_ne!(FileFormat::Heif, FileFormat::Avif);
+        assert_ne!(FileFormat::Mp4, FileFormat::Mov);
     }
 
     #[test]
