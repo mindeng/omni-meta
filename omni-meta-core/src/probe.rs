@@ -10,16 +10,21 @@ pub(crate) const PROBE_MAX: usize = 12;
 
 pub fn probe(buf: &[u8]) -> FileFormat {
     if buf.len() >= 2 && buf[0] == 0xFF && buf[1] == 0xD8 {
-        FileFormat::Jpeg
-    } else {
-        FileFormat::Unknown
+        return FileFormat::Jpeg;
     }
+    if buf.len() >= 8
+        && buf[..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+    {
+        return FileFormat::Png;
+    }
+    FileFormat::Unknown
 }
 
 /// 把已探测的格式映射到对应解析器。Unknown / 尚未实现的格式 → None。
 pub(crate) fn parser_for(fmt: FileFormat) -> Option<Box<dyn MetaParser>> {
     match fmt {
         FileFormat::Jpeg => Some(Box::new(crate::formats::jpeg::JpegParser::new())),
+        FileFormat::Png => Some(Box::new(crate::formats::png::PngParser::new())),
         _ => None,
     }
 }
@@ -49,5 +54,12 @@ mod tests {
     fn parser_for_jpeg_some_unknown_none() {
         assert!(parser_for(FileFormat::Jpeg).is_some());
         assert!(parser_for(FileFormat::Unknown).is_none());
+    }
+
+    #[test]
+    fn detects_png_signature() {
+        let sig = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        assert_eq!(probe(&sig), FileFormat::Png);
+        assert!(parser_for(FileFormat::Png).is_some());
     }
 }

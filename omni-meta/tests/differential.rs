@@ -163,3 +163,43 @@ fn fixture_with_sof() -> Vec<u8> {
 fn differential_sof_dimensions() {
     assert_all_equal(&fixture_with_sof());
 }
+
+fn png_chunk(ctype: &[u8; 4], data: &[u8]) -> Vec<u8> {
+    let mut c = Vec::new();
+    c.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    c.extend_from_slice(ctype);
+    c.extend_from_slice(data);
+    c.extend_from_slice(&[0, 0, 0, 0]);
+    c
+}
+
+fn fixture_png() -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    // IHDR 1920x1080
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&1920u32.to_be_bytes());
+    ihdr.extend_from_slice(&1080u32.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    p.extend_from_slice(&png_chunk(b"IHDR", &ihdr));
+    // eXIf：完整 TIFF（复用 make_tiff）
+    p.extend_from_slice(&png_chunk(b"eXIf", &make_tiff()));
+    // iTXt XMP（未压缩）
+    let mut itxt = Vec::new();
+    itxt.extend_from_slice(b"XML:com.adobe.xmp");
+    itxt.push(0);
+    itxt.push(0);
+    itxt.push(0);
+    itxt.push(0);
+    itxt.push(0);
+    itxt.extend_from_slice(br#"<rdf:Description tiff:Make="Acme"/>"#);
+    p.extend_from_slice(&png_chunk(b"iTXt", &itxt));
+    p.extend_from_slice(&png_chunk(b"IDAT", &[1, 2, 3, 4]));
+    p.extend_from_slice(&png_chunk(b"IEND", &[]));
+    p
+}
+
+#[test]
+fn differential_png() {
+    assert_all_equal(&fixture_png());
+}
