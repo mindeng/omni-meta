@@ -58,11 +58,31 @@ pub enum Value {
     List(Vec<Value>),    // 任意数值类型 cnt>1（如 GPS lat = 3×Rational）
 }
 
+/// 民用时间戳。容器/EXIF 共用的归一时间表示。
+/// `tz_offset_min`:
+///   None     = 无时区信息（如 EXIF 本地时间，不臆造）
+///   Some(0)  = UTC（如 BMFF moov 的 1904 纪元秒）
+///   Some(±n) = UTC±n 分钟（如 EXIF OffsetTime "+09:00" → Some(540)）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DateTimeParts {
+    pub year: u16,
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+    pub tz_offset_min: Option<i16>,
+}
+
 /// 容器原生字段（解析器直接从头部读出，不经 codec）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
     Width(u32),
     Height(u32),
+    /// 媒体时长，毫秒。
+    Duration(u64),
+    /// 创建时间。
+    Created(DateTimeParts),
 }
 
 /// 一条 XMP 属性。prefix 为惯用前缀（如 "tiff"），原样保留，不解析命名空间 URI。
@@ -106,6 +126,8 @@ pub struct Unified {
     pub orientation: Option<Orientation>,
     pub camera_make: Option<String>,
     pub camera_model: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub created: Option<DateTimeParts>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,5 +220,33 @@ mod tests {
             value: String::from("1"),
         };
         assert_eq!(p.name, "Orientation");
+    }
+
+    #[test]
+    fn datetime_parts_construct_and_eq() {
+        let a = DateTimeParts { year: 1970, month: 1, day: 1, hour: 0, minute: 0, second: 0, tz_offset_min: Some(0) };
+        let b = DateTimeParts { year: 1970, month: 1, day: 1, hour: 0, minute: 0, second: 0, tz_offset_min: None };
+        assert_eq!(a.tz_offset_min, Some(0)); // BMFF: UTC
+        assert_eq!(b.tz_offset_min, None);    // EXIF 本地: 无时区
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn field_has_duration_and_created() {
+        let d = Field::Duration(1_501_500);
+        assert_eq!(d, Field::Duration(1_501_500));
+        let c = Field::Created(DateTimeParts {
+            year: 2018, month: 1, day: 1, hour: 0, minute: 0, second: 0, tz_offset_min: Some(0),
+        });
+        assert_ne!(c, Field::Created(DateTimeParts {
+            year: 2019, month: 1, day: 1, hour: 0, minute: 0, second: 0, tz_offset_min: Some(0),
+        }));
+    }
+
+    #[test]
+    fn unified_has_duration_and_created_defaulting_none() {
+        let u = Unified::default();
+        assert_eq!(u.duration_ms, None);
+        assert_eq!(u.created, None);
     }
 }

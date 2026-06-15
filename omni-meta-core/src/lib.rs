@@ -24,8 +24,8 @@ pub use driver::Outcome;
 pub use error::Error;
 pub use limits::Limits;
 pub use model::{
-    ExifTag, FileFormat, IfdKind, Metadata, Orientation, RawTags, Unified, Value, WarnKind,
-    Warning, XmpProperty,
+    DateTimeParts, ExifTag, FileFormat, IfdKind, Metadata, Orientation, RawTags, Unified, Value,
+    WarnKind, Warning, XmpProperty,
 };
 
 #[cfg(test)]

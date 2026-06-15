@@ -40,6 +40,8 @@ impl Collector {
                 }
             }
             Event::Warning(w) => self.warnings.push(w),
+            // Task 2 将在此收集 Duration/Created；暂先忽略。
+            Event::Field(Field::Duration(_)) | Event::Field(Field::Created(_)) => {}
         }
     }
 }
