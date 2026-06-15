@@ -880,6 +880,8 @@ mod tests {
         assert_eq!(meta.unified.height, Some(3024));
         assert!(meta.raw.exif.iter().any(|t| t.tag == 0x010F), "应抽到 Make 标签");
         assert!(meta.raw.xmp.iter().any(|x| x.name == "Make" && x.value == "Acme"));
+        assert_eq!(meta.unified.camera_make.as_deref(), Some("Acme"),
+            "unified.camera_make 须经 normalize 从 EXIF IFD0 Make 投影");
     }
 
     #[test]
@@ -905,7 +907,7 @@ mod tests {
         iloc_p.extend_from_slice(&0u16.to_be_bytes()); // dri
         iloc_p.extend_from_slice(&1u16.to_be_bytes()); // extent_count
         iloc_p.extend_from_slice(&0u32.to_be_bytes()); // idat 内偏移 0
-        iloc_p.extend_from_slice(&(exif.len() as u32).to_be_bytes()); // 长度
+        iloc_p.extend_from_slice(&(exif.len() as u32).to_be_bytes()); // 长度(含 4 字节 tiff_header_offset 前缀, parse_meta 内剥离)
         let iloc = box_bytes(b"iloc", &iloc_p);
         let mut meta_p = alloc::vec![0u8, 0, 0, 0];
         meta_p.extend_from_slice(&pitm);
@@ -919,5 +921,7 @@ mod tests {
         let meta = crate::driver::finalize(col, crate::model::FileFormat::Heif);
         assert!(meta.warnings.is_empty(), "warnings: {:?}", meta.warnings);
         assert!(meta.raw.exif.iter().any(|t| t.tag == 0x010F), "idat 内联 Exif 应被抽到");
+        assert_eq!(meta.unified.camera_make.as_deref(), Some("Acme"),
+            "idat 路径 EXIF 同样须经 normalize 投影至 unified");
     }
 }

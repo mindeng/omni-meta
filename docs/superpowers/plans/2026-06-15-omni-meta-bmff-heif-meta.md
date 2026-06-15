@@ -1247,11 +1247,13 @@ git commit -m "feat: BmffParser 两阶段状态机 (Walk 找 meta + Extract Seek
     fn end_to_end_heic_method0() {
         let buf = heic_method0();
         let col = crate::driver::drive_slice(&buf, &mut BmffParser::new(), crate::limits::Limits::default());
-        assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
-        assert_eq!(col.width, Some(4032));
-        assert_eq!(col.height, Some(3024));
-        assert!(col.exif.iter().any(|t| t.tag == 0x010F), "应抽到 Make 标签");
-        assert!(col.xmp.iter().any(|x| x.name == "Make" && x.value == "Acme"));
+        // 经 finalize 投影为 Metadata（与 webp.rs 测试同款；维度走 unified 公有字段）。
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Heif);
+        assert!(meta.warnings.is_empty(), "warnings: {:?}", meta.warnings);
+        assert_eq!(meta.unified.width, Some(4032));
+        assert_eq!(meta.unified.height, Some(3024));
+        assert!(meta.raw.exif.iter().any(|t| t.tag == 0x010F), "应抽到 Make 标签");
+        assert!(meta.raw.xmp.iter().any(|x| x.name == "Make" && x.value == "Acme"));
     }
 
     #[test]
@@ -1288,8 +1290,9 @@ git commit -m "feat: BmffParser 两阶段状态机 (Walk 找 meta + Extract Seek
         let mut f = ftyp_heic();
         f.extend_from_slice(&meta);
         let col = crate::driver::drive_slice(&f, &mut BmffParser::new(), crate::limits::Limits::default());
-        assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
-        assert!(col.exif.iter().any(|t| t.tag == 0x010F), "idat 内联 Exif 应被抽到");
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Heif);
+        assert!(meta.warnings.is_empty(), "warnings: {:?}", meta.warnings);
+        assert!(meta.raw.exif.iter().any(|t| t.tag == 0x010F), "idat 内联 Exif 应被抽到");
     }
 ```
 
