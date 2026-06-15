@@ -7,6 +7,8 @@ use crate::model::FileFormat;
 
 /// 各格式签名最长字节数（WebP "RIFF"+4+"WEBP" = 12）。
 pub(crate) const PROBE_MAX: usize = 12;
+// 编译期断言：PROBE_MAX 必须覆盖最长签名（WebP = 12 字节）。
+const _: () = assert!(PROBE_MAX >= 12);
 
 pub fn probe(buf: &[u8]) -> FileFormat {
     if buf.len() >= 2 && buf[0] == 0xFF && buf[1] == 0xD8 {
@@ -51,11 +53,6 @@ mod tests {
         assert_eq!(probe(&[0x89, 0x50]), FileFormat::Unknown);
         assert_eq!(probe(&[0xFF]), FileFormat::Unknown);
         assert_eq!(probe(&[]), FileFormat::Unknown);
-    }
-
-    #[test]
-    fn probe_max_covers_signatures() {
-        assert!(PROBE_MAX >= 12);
     }
 
     #[test]

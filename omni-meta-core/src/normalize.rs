@@ -40,10 +40,10 @@ pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
                 u.camera_model = Some(p.value.clone());
             }
             ("tiff", "Orientation") if u.orientation.is_none() => {
-                if let Ok(v) = p.value.parse::<u16>() {
-                    if let Some(o) = Orientation::from_u16(v) {
-                        u.orientation = Some(o);
-                    }
+                if let Ok(v) = p.value.parse::<u16>()
+                    && let Some(o) = Orientation::from_u16(v)
+                {
+                    u.orientation = Some(o);
                 }
             }
             ("tiff", "ImageWidth") if u.width.is_none() => {

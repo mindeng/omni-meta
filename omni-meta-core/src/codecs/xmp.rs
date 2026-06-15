@@ -113,10 +113,10 @@ fn scan_attributes(text: &str, out: &mut Vec<XmpProperty>, limits: &Limits) {
             if ns < ne {
                 let name = &text[ns..ne];
                 let value = &text[vs..ve];
-                if let Some((px, nm)) = split_prefix(name) {
-                    if !is_structural_prefix(px) {
-                        push_prop(out, limits, px, nm, value);
-                    }
+                if let Some((px, nm)) = split_prefix(name)
+                    && !is_structural_prefix(px)
+                {
+                    push_prop(out, limits, px, nm, value);
                 }
             }
             i = ve + 1;
@@ -154,10 +154,10 @@ fn scan_elements(text: &str, out: &mut Vec<XmpProperty>, limits: &Limits) {
         // 闭合标签
         if b[i + 1] == b'/' {
             let (px, nm, end) = parse_qname(text, i + 2);
-            if let Some(f) = stack.last() {
-                if f.prefix == px && f.name == nm {
-                    stack.pop();
-                }
+            if let Some(f) = stack.last()
+                && f.prefix == px && f.name == nm
+            {
+                stack.pop();
             }
             i = find_gt(b, end);
             continue;
@@ -205,13 +205,13 @@ fn record_leaf<'a>(
     let val = content.trim();
     if px == "rdf" && nm == "li" {
         // 若直接容器是 rdf:Alt，只取首个
-        if let Some(top) = stack.last_mut() {
-            if top.is_alt {
-                if top.alt_taken {
-                    return;
-                }
-                top.alt_taken = true;
+        if let Some(top) = stack.last_mut()
+            && top.is_alt
+        {
+            if top.alt_taken {
+                return;
             }
+            top.alt_taken = true;
         }
         // 归属到最近的非 rdf 祖先属性名
         if let Some(prop) = stack.iter().rev().find(|f| f.prefix != "rdf") {
