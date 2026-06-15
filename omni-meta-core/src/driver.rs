@@ -62,11 +62,11 @@ pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
     let raw = RawTags { exif: col.exif, xmp: col.xmp };
     let mut warnings = col.warnings;
     let mut unified = normalize(&raw, &mut warnings);
-    if unified.width.is_none() {
-        unified.width = width;
+    if let Some(w) = width {
+        unified.width = Some(w);
     }
-    if unified.height.is_none() {
-        unified.height = height;
+    if let Some(h) = height {
+        unified.height = Some(h);
     }
     Metadata { unified, raw, warnings, format }
 }

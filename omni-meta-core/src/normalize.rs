@@ -30,13 +30,42 @@ pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
             _ => {}
         }
     }
+    // XMP 回退：仅填 EXIF 未提供的槽。
+    for p in &raw.xmp {
+        match (p.prefix.as_str(), p.name.as_str()) {
+            ("tiff", "Make") if u.camera_make.is_none() => {
+                u.camera_make = Some(p.value.clone());
+            }
+            ("tiff", "Model") if u.camera_model.is_none() => {
+                u.camera_model = Some(p.value.clone());
+            }
+            ("tiff", "Orientation") if u.orientation.is_none() => {
+                if let Ok(v) = p.value.parse::<u16>() {
+                    if let Some(o) = Orientation::from_u16(v) {
+                        u.orientation = Some(o);
+                    }
+                }
+            }
+            ("tiff", "ImageWidth") if u.width.is_none() => {
+                if let Ok(v) = p.value.parse::<u32>() {
+                    u.width = Some(v);
+                }
+            }
+            ("tiff", "ImageLength") if u.height.is_none() => {
+                if let Ok(v) = p.value.parse::<u32>() {
+                    u.height = Some(v);
+                }
+            }
+            _ => {}
+        }
+    }
     u
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::ExifTag;
+    use crate::model::{ExifTag, XmpProperty};
     use alloc::string::String;
     use alloc::vec::Vec;
 
@@ -69,5 +98,43 @@ mod tests {
         assert_eq!(u.orientation, None);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].kind, WarnKind::UnrecognizedValue);
+    }
+
+    fn xmp(prefix: &str, name: &str, value: &str) -> XmpProperty {
+        XmpProperty {
+            prefix: String::from(prefix),
+            name: String::from(name),
+            value: String::from(value),
+        }
+    }
+
+    #[test]
+    fn xmp_fills_when_exif_absent() {
+        let raw = RawTags {
+            exif: Vec::new(),
+            xmp: Vec::from([
+                xmp("tiff", "Make", "XmpMake"),
+                xmp("tiff", "Orientation", "6"),
+            ]),
+        };
+        let mut warnings = Vec::new();
+        let u = normalize(&raw, &mut warnings);
+        assert_eq!(u.camera_make.as_deref(), Some("XmpMake"));
+        assert_eq!(u.orientation, Some(Orientation::Rotate90));
+    }
+
+    #[test]
+    fn exif_wins_over_xmp() {
+        let raw = RawTags {
+            exif: Vec::from([ExifTag {
+                ifd: 0,
+                tag: 0x010F,
+                value: Value::Text(String::from("ExifMake")),
+            }]),
+            xmp: Vec::from([xmp("tiff", "Make", "XmpMake")]),
+        };
+        let mut warnings = Vec::new();
+        let u = normalize(&raw, &mut warnings);
+        assert_eq!(u.camera_make.as_deref(), Some("ExifMake"));
     }
 }
