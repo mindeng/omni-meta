@@ -32,7 +32,6 @@ pub enum PayloadKind {
 pub enum Event<'a> {
     Payload { kind: PayloadKind, data: &'a [u8] },
     /// 容器原生字段（width/height 等）。
-    #[allow(dead_code)]
     Field(Field),
     Warning(Warning),
 }

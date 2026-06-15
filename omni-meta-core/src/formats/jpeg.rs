@@ -6,6 +6,7 @@
 use alloc::vec::Vec;
 
 use crate::demand::{Demand, Event, MetaParser, PayloadKind, PullResult};
+use crate::model::Field;
 
 #[derive(Debug, Default)]
 pub struct JpegParser {
@@ -76,6 +77,33 @@ impl MetaParser for JpegParser {
                     // 不尝试把后续字节解释为长度（否则产生虚假巨型 Skip）。
                     self.done = true;
                     return PullResult { demand: Demand::Done, consumed: pos, events };
+                }
+                0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
+                    // SOF：读 precision(1) + height(2 BE) + width(2 BE)
+                    if rest.len() < after + 2 {
+                        return PullResult { demand: Demand::NeedBytes(after + 2), consumed: pos, events };
+                    }
+                    let len = u16::from_be_bytes([rest[after], rest[after + 1]]) as usize;
+                    if len < 2 {
+                        self.done = true;
+                        return PullResult { demand: Demand::Done, consumed: pos, events };
+                    }
+                    let body_start = after + 2;
+                    // 需要 body 前 5 字节：precision(1)+height(2)+width(2)
+                    if rest.len() < body_start + 5 {
+                        return PullResult { demand: Demand::NeedBytes(body_start + 5), consumed: pos, events };
+                    }
+                    let h = u16::from_be_bytes([rest[body_start + 1], rest[body_start + 2]]) as u32;
+                    let w = u16::from_be_bytes([rest[body_start + 3], rest[body_start + 4]]) as u32;
+                    events.push(Event::Field(Field::Width(w)));
+                    events.push(Event::Field(Field::Height(h)));
+                    // 跳过整段剩余（消费段头，Skip body）
+                    let body_len = len - 2;
+                    return PullResult {
+                        demand: Demand::Skip(body_len as u64),
+                        consumed: pos + body_start,
+                        events,
+                    };
                 }
                 _ => {
                     if rest.len() < after + 2 {
@@ -275,6 +303,37 @@ mod tests {
             other => panic!("expected NeedBytes, got {other:?}"),
         }
         assert!(res.events.is_empty());
+    }
+
+    /// SOF0 段应发出 Width/Height Field，并继续到 EOI。
+    #[test]
+    fn sof_emits_dimensions() {
+        // SOI + SOF0(len=17: precision1 + height2 + width2 + ...) + EOI
+        let mut j: Vec<u8> = Vec::new();
+        j.extend_from_slice(&[0xFF, 0xD8]); // SOI
+        j.extend_from_slice(&[0xFF, 0xC0]); // SOF0
+        // 段长 = 2(len) + 1(precision) + 2(height) + 2(width) + 6(1 组件) = 13
+        j.extend_from_slice(&13u16.to_be_bytes());
+        j.push(8); // precision
+        j.extend_from_slice(&1080u16.to_be_bytes()); // height
+        j.extend_from_slice(&1920u16.to_be_bytes()); // width
+        j.extend_from_slice(&[1, 0x11, 0]); // 1 个组件
+        j.extend_from_slice(&[0xFF, 0xD9]); // EOI
+
+        let mut p = JpegParser::new();
+        let res = p.pull(&j);
+        let mut w = None;
+        let mut h = None;
+        for ev in &res.events {
+            if let Event::Field(crate::model::Field::Width(x)) = ev {
+                w = Some(*x);
+            }
+            if let Event::Field(crate::model::Field::Height(x)) = ev {
+                h = Some(*x);
+            }
+        }
+        assert_eq!(w, Some(1920));
+        assert_eq!(h, Some(1080));
     }
 
     /// 非元数据段（APP0/JFIF）应发 Skip 跳过段体，consumed 指向段体起点。
