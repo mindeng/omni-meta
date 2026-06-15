@@ -1,5 +1,7 @@
-//! EXIF 解码：TIFF 头 (II/MM + 42 + IFD0 偏移) → IFD0 标签。
-//! 本计划只解 ASCII (type 2) 与 SHORT (type 3) 标签，足够 Make/Model/Orientation。
+//! EXIF 解码：TIFF 头 (II/MM + 42 + IFD0 偏移) 起步,扁平工作队列跟随
+//! sub-IFD (Exif 0x8769 / GPS 0x8825 / Interop 0xA005) 与 next-IFD (IFD1) 指针。
+//! 值读取器按 EXIF type 解出 BYTE/ASCII/SHORT/LONG/RATIONAL/SRATIONAL/UNDEFINED 及其数组。
+//! visited 集合防环,max_ifds 封顶 IFD 总数与队列长度,全程边界安全、不 panic。
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -35,16 +37,32 @@ pub fn decode(
             return;
         }
     };
-    parse_ifd(tiff, endian, ifd0, out, warnings, limits);
+    let mut queue: Vec<(usize, IfdKind)> = Vec::from([(ifd0, IfdKind::Primary)]);
+    let mut visited: Vec<usize> = Vec::new();
+    let mut ifd_count = 0usize;
+    while let Some((off, kind)) = queue.pop() {
+        if ifd_count >= limits.max_ifds {
+            break;
+        }
+        if visited.contains(&off) {
+            continue;
+        }
+        visited.push(off);
+        ifd_count += 1;
+        parse_ifd(tiff, endian, off, kind, out, warnings, limits, &mut queue);
+    }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parse_ifd(
     tiff: &[u8],
     e: Endian,
     off: usize,
+    kind: IfdKind,
     out: &mut Vec<ExifTag>,
     warnings: &mut Vec<Warning>,
     limits: &Limits,
+    queue: &mut Vec<(usize, IfdKind)>,
 ) {
     let mut cur = ByteCursor::new(tiff);
     if cur.seek(off).is_none() {
@@ -78,9 +96,53 @@ fn parse_ifd(
             Some(s) => s,
             None => break,
         };
-        if let Some(val) = read_value(tiff, e, typ, cnt, valoff, limits.max_payload_bytes) {
-            out.push(ExifTag { ifd: IfdKind::Primary, tag, value: val });
+        // sub-IFD 指针:读 LONG 偏移入队,指针标签本身不作为数据发出。
+        if let Some(child) = subifd_target(kind, tag) {
+            // 队列封顶 max_ifds:最多只会解析 max_ifds 个 IFD,
+            // 多余的待解条目无意义,丢弃以防恶意 IFD 用海量重复指针放大内存。
+            if queue.len() < limits.max_ifds
+                && let Ok(arr) = <&[u8; 4]>::try_from(valoff)
+            {
+                queue.push((read_u32_at(e, arr) as usize, child));
+            }
+            continue;
         }
+        if let Some(val) = read_value(tiff, e, typ, cnt, valoff, limits.max_payload_bytes) {
+            out.push(ExifTag { ifd: kind, tag, value: val });
+        }
+    }
+    // next-IFD 仅由 Primary 跟随 → IFD1(Thumbnail)。用显式偏移定位 next 字段,
+    // 不依赖提前 break 后的游标位置。
+    if kind == IfdKind::Primary
+        && let Some(np) = next_ifd_pos(off, count)
+    {
+        let mut c2 = ByteCursor::new(tiff);
+        if c2.seek(np).is_some()
+            && let Some(next) = c2.u32(e)
+            && next != 0
+            && queue.len() < limits.max_ifds
+        {
+            queue.push((next as usize, IfdKind::Thumbnail));
+        }
+    }
+}
+
+/// IFD 内 next-IFD 偏移字段的位置:off + 2(count) + count*12(条目)。
+fn next_ifd_pos(off: usize, count: u16) -> Option<usize> {
+    off.checked_add(2)?
+        .checked_add((count as usize).checked_mul(12)?)
+}
+
+/// 给定父 IFD 与标签,返回该标签所指向的子 IFD 种类(若为受承认的指针)。
+fn subifd_target(parent: IfdKind, tag: u16) -> Option<IfdKind> {
+    const TAG_EXIF_IFD: u16 = 0x8769;
+    const TAG_GPS_IFD: u16 = 0x8825;
+    const TAG_INTEROP_IFD: u16 = 0xA005;
+    match (parent, tag) {
+        (IfdKind::Primary, TAG_EXIF_IFD) => Some(IfdKind::Exif),
+        (IfdKind::Primary, TAG_GPS_IFD) => Some(IfdKind::Gps),
+        (IfdKind::Exif, TAG_INTEROP_IFD) => Some(IfdKind::Interop),
+        _ => None,
     }
 }
 
@@ -386,5 +448,159 @@ mod tests {
         let (out, warns) = decode_one(&t);
         assert!(out.is_empty());
         assert!(warns.is_empty());
+    }
+
+    /// 小端 TIFF:IFD0 含一个 Exif 指针(0x8769)指向一个 Exif sub-IFD,
+    /// 后者含 FNumber(0x829D) RATIONAL=4/1。布局:
+    ///  @0 II,42,IFD0@8 | @8 IFD0 count=1 | @10 entry 0x8769 LONG cnt1 val=26
+    ///  @22 next=0 | @26 Exif IFD count=1 | @28 entry 0x829D RATIONAL cnt1 val=44
+    ///  @40 next=0 | @44 num=4,den=1
+    fn tiff_with_exif_subifd() -> Vec<u8> {
+        let mut t: Vec<u8> = Vec::new();
+        t.extend_from_slice(b"II");
+        t.extend_from_slice(&42u16.to_le_bytes());
+        t.extend_from_slice(&8u32.to_le_bytes());
+        t.extend_from_slice(&1u16.to_le_bytes());
+        t.extend_from_slice(&0x8769u16.to_le_bytes());
+        t.extend_from_slice(&4u16.to_le_bytes()); // LONG
+        t.extend_from_slice(&1u32.to_le_bytes());
+        t.extend_from_slice(&26u32.to_le_bytes()); // → Exif IFD @26
+        t.extend_from_slice(&0u32.to_le_bytes());
+        debug_assert_eq!(t.len(), 26);
+        t.extend_from_slice(&1u16.to_le_bytes());
+        t.extend_from_slice(&0x829Du16.to_le_bytes());
+        t.extend_from_slice(&5u16.to_le_bytes()); // RATIONAL
+        t.extend_from_slice(&1u32.to_le_bytes());
+        t.extend_from_slice(&44u32.to_le_bytes()); // → 数据 @44
+        t.extend_from_slice(&0u32.to_le_bytes());
+        debug_assert_eq!(t.len(), 44);
+        t.extend_from_slice(&4u32.to_le_bytes());
+        t.extend_from_slice(&1u32.to_le_bytes());
+        t
+    }
+
+    #[test]
+    fn follows_exif_subifd_and_tags_ifd() {
+        let t = tiff_with_exif_subifd();
+        let (out, warns) = decode_one(&t);
+        assert!(warns.is_empty(), "warns: {:?}", warns);
+        assert_eq!(out.len(), 1); // 指针标签不发出 → 仅 FNumber
+        assert_eq!(out[0].ifd, IfdKind::Exif);
+        assert_eq!(out[0].tag, 0x829D);
+        assert_eq!(out[0].value, Value::Rational(4, 1));
+    }
+
+    #[test]
+    fn follows_gps_subifd_with_rational_list() {
+        // IFD0 GPS 指针(0x8825)→ GPS IFD GPSLatitude(0x0002) RATIONAL cnt=3。
+        let mut t: Vec<u8> = Vec::new();
+        t.extend_from_slice(b"II");
+        t.extend_from_slice(&42u16.to_le_bytes());
+        t.extend_from_slice(&8u32.to_le_bytes());
+        t.extend_from_slice(&1u16.to_le_bytes());
+        t.extend_from_slice(&0x8825u16.to_le_bytes());
+        t.extend_from_slice(&4u16.to_le_bytes());
+        t.extend_from_slice(&1u32.to_le_bytes());
+        t.extend_from_slice(&26u32.to_le_bytes());
+        t.extend_from_slice(&0u32.to_le_bytes());
+        t.extend_from_slice(&1u16.to_le_bytes());
+        t.extend_from_slice(&0x0002u16.to_le_bytes());
+        t.extend_from_slice(&5u16.to_le_bytes());
+        t.extend_from_slice(&3u32.to_le_bytes());
+        t.extend_from_slice(&44u32.to_le_bytes());
+        t.extend_from_slice(&0u32.to_le_bytes());
+        debug_assert_eq!(t.len(), 44);
+        for n in [12u32, 34, 56] {
+            t.extend_from_slice(&n.to_le_bytes());
+            t.extend_from_slice(&1u32.to_le_bytes());
+        }
+        let (out, warns) = decode_one(&t);
+        assert!(warns.is_empty(), "warns: {:?}", warns);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].ifd, IfdKind::Gps);
+        assert_eq!(
+            out[0].value,
+            Value::List(Vec::from([
+                Value::Rational(12, 1),
+                Value::Rational(34, 1),
+                Value::Rational(56, 1),
+            ]))
+        );
+    }
+
+    #[test]
+    fn follows_next_ifd_as_thumbnail() {
+        // IFD0(Orientation=1)→ next 指向 IFD1(Orientation=6)。
+        let mut t: Vec<u8> = Vec::new();
+        t.extend_from_slice(b"II");
+        t.extend_from_slice(&42u16.to_le_bytes());
+        t.extend_from_slice(&8u32.to_le_bytes());
+        t.extend_from_slice(&1u16.to_le_bytes());
+        t.extend_from_slice(&0x0112u16.to_le_bytes());
+        t.extend_from_slice(&3u16.to_le_bytes());
+        t.extend_from_slice(&1u32.to_le_bytes());
+        t.extend_from_slice(&1u32.to_le_bytes()); // 内联值=1
+        t.extend_from_slice(&26u32.to_le_bytes()); // next=26 → IFD1
+        debug_assert_eq!(t.len(), 26);
+        t.extend_from_slice(&1u16.to_le_bytes());
+        t.extend_from_slice(&0x0112u16.to_le_bytes());
+        t.extend_from_slice(&3u16.to_le_bytes());
+        t.extend_from_slice(&1u32.to_le_bytes());
+        t.extend_from_slice(&6u32.to_le_bytes()); // 内联值=6
+        t.extend_from_slice(&0u32.to_le_bytes());
+        let (out, warns) = decode_one(&t);
+        assert!(warns.is_empty(), "warns: {:?}", warns);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].ifd, IfdKind::Primary);
+        assert_eq!(out[0].value, Value::U16(1));
+        assert_eq!(out[1].ifd, IfdKind::Thumbnail);
+        assert_eq!(out[1].value, Value::U16(6));
+    }
+
+    #[test]
+    fn cyclic_subifd_pointer_terminates() {
+        // IFD0 的 Exif 指针指回 IFD0(@8)→ visited 防护,终止不挂起不 panic。
+        let mut t: Vec<u8> = Vec::new();
+        t.extend_from_slice(b"II");
+        t.extend_from_slice(&42u16.to_le_bytes());
+        t.extend_from_slice(&8u32.to_le_bytes());
+        t.extend_from_slice(&1u16.to_le_bytes());
+        t.extend_from_slice(&0x8769u16.to_le_bytes());
+        t.extend_from_slice(&4u16.to_le_bytes());
+        t.extend_from_slice(&1u32.to_le_bytes());
+        t.extend_from_slice(&8u32.to_le_bytes()); // 指回 IFD0
+        t.extend_from_slice(&0u32.to_le_bytes());
+        let (out, _warns) = decode_one(&t);
+        assert_eq!(out.len(), 0); // IFD0 只有指针标签(不发出);关键是终止
+    }
+
+    #[test]
+    fn max_ifds_caps_subifd_traversal() {
+        // max_ifds=1 → 只解 IFD0,Exif sub-IFD 的标签缺席。
+        let t = tiff_with_exif_subifd();
+        let mut out = Vec::new();
+        let mut warns = Vec::new();
+        let limits = Limits { max_ifds: 1, ..Limits::default() };
+        decode(&t, &mut out, &mut warns, &limits);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn out_of_bounds_subifd_pointer_warns_without_panic() {
+        // IFD0 的 Exif 指针指向越界偏移 9999。
+        let mut t: Vec<u8> = Vec::new();
+        t.extend_from_slice(b"II");
+        t.extend_from_slice(&42u16.to_le_bytes());
+        t.extend_from_slice(&8u32.to_le_bytes());
+        t.extend_from_slice(&1u16.to_le_bytes());
+        t.extend_from_slice(&0x8769u16.to_le_bytes());
+        t.extend_from_slice(&4u16.to_le_bytes());
+        t.extend_from_slice(&1u32.to_le_bytes());
+        t.extend_from_slice(&9999u32.to_le_bytes());
+        t.extend_from_slice(&0u32.to_le_bytes());
+        let (out, warns) = decode_one(&t);
+        assert!(out.is_empty());
+        assert_eq!(warns.len(), 1);
+        assert_eq!(warns[0].kind, WarnKind::BadExifHeader);
     }
 }
