@@ -7,13 +7,16 @@ use alloc::vec::Vec;
 use crate::codecs;
 use crate::demand::{Demand, Event, MetaParser, PayloadKind};
 use crate::limits::Limits;
-use crate::model::{ExifTag, FileFormat, Metadata, RawTags, WarnKind, Warning};
+use crate::model::{ExifTag, Field, FileFormat, Metadata, RawTags, WarnKind, Warning, XmpProperty};
 use crate::normalize::normalize;
 
 /// 解析过程中累积的产物。
 pub struct Collector {
     pub exif: Vec<ExifTag>,
+    pub xmp: Vec<XmpProperty>,
     pub warnings: Vec<Warning>,
+    width: Option<u32>,
+    height: Option<u32>,
     limits: Limits,
 }
 
@@ -23,11 +26,18 @@ impl Collector {
             Event::Payload { kind: PayloadKind::Exif, data } => {
                 codecs::exif::decode(data, &mut self.exif, &mut self.warnings, &self.limits);
             }
-            Event::Payload { kind: PayloadKind::Xmp, data: _ } => {
-                // XMP dispatch wired in Task 3.
+            Event::Payload { kind: PayloadKind::Xmp, data } => {
+                codecs::xmp::decode(data, &mut self.xmp, &mut self.warnings, &self.limits);
             }
-            Event::Field(_) => {
-                // Field routing wired in Task 3.
+            Event::Field(Field::Width(w)) => {
+                if self.width.is_none() {
+                    self.width = Some(w);
+                }
+            }
+            Event::Field(Field::Height(h)) => {
+                if self.height.is_none() {
+                    self.height = Some(h);
+                }
             }
             Event::Warning(w) => self.warnings.push(w),
         }
@@ -48,9 +58,16 @@ pub enum Outcome {
 
 /// 收尾：把 Collector 投影为统一模型，组装 Metadata。read_slice 与 push 路径共用。
 pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
-    let raw = RawTags { exif: col.exif, xmp: Vec::new() };
+    let (width, height) = (col.width, col.height);
+    let raw = RawTags { exif: col.exif, xmp: col.xmp };
     let mut warnings = col.warnings;
-    let unified = normalize(&raw, &mut warnings);
+    let mut unified = normalize(&raw, &mut warnings);
+    if unified.width.is_none() {
+        unified.width = width;
+    }
+    if unified.height.is_none() {
+        unified.height = height;
+    }
     Metadata { unified, raw, warnings, format }
 }
 
@@ -74,7 +91,14 @@ impl StreamDriver {
             buf: Vec::new(),
             cursor: 0,
             parser,
-            collector: Collector { exif: Vec::new(), warnings: Vec::new(), limits },
+            collector: Collector {
+                exif: Vec::new(),
+                xmp: Vec::new(),
+                warnings: Vec::new(),
+                width: None,
+                height: None,
+                limits,
+            },
             skip_remaining: 0,
             pos_base: 0,
             done: false,
@@ -262,7 +286,14 @@ impl StreamDriver {
 /// 终止保证：每次迭代要么前进、要么 break；并设有迭代预算兜底，
 /// 因此任何（含畸形/恶意）解析器都不会让它死循环。
 pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> Collector {
-    let mut col = Collector { exif: Vec::new(), warnings: Vec::new(), limits };
+    let mut col = Collector {
+        exif: Vec::new(),
+        xmp: Vec::new(),
+        warnings: Vec::new(),
+        width: None,
+        height: None,
+        limits,
+    };
     let mut pos: usize = 0;
     // 防卡死预算：正常解析的 pull 次数远小于此（约等于段/box 数量）；
     // 仅用于解析器反复 SeekTo 同一位置等零前进情形的兜底。
@@ -561,6 +592,48 @@ mod tests {
         assert_eq!(meta.unified.orientation, Some(crate::model::Orientation::Rotate90));
         assert_eq!(meta.unified.camera_make.as_deref(), Some("Acme"));
         assert_eq!(meta.raw.exif.len(), 2);
+    }
+
+    use crate::model::{Field, XmpProperty};
+    use crate::demand::PayloadKind;
+
+    /// 一次性发出 Width/Height Field + 一个 XMP 载荷后 Done 的假解析器。
+    struct FieldXmpEmitter {
+        done: bool,
+    }
+    impl MetaParser for FieldXmpEmitter {
+        fn pull<'a>(&mut self, input: &'a [u8]) -> crate::demand::PullResult<'a> {
+            use crate::demand::PullResult;
+            self.done = true;
+            let events = vec![
+                Event::Field(Field::Width(1920)),
+                Event::Field(Field::Height(1080)),
+                Event::Payload {
+                    kind: PayloadKind::Xmp,
+                    data: br#"<rdf:Description tiff:Make="Acme"/>"#,
+                },
+            ];
+            PullResult { demand: Demand::Done, consumed: input.len(), events }
+        }
+    }
+
+    #[test]
+    fn collector_records_fields_and_xmp() {
+        use alloc::string::String;
+        let buf = [0u8; 4];
+        let mut p = FieldXmpEmitter { done: false };
+        let col = drive_slice(&buf, &mut p, Limits::default());
+        let meta = finalize(col, FileFormat::Png);
+        assert_eq!(meta.unified.width, Some(1920));
+        assert_eq!(meta.unified.height, Some(1080));
+        assert_eq!(
+            meta.raw.xmp,
+            vec![XmpProperty {
+                prefix: String::from("tiff"),
+                name: String::from("Make"),
+                value: String::from("Acme"),
+            }]
+        );
     }
 
     fn make_tiff() -> Vec<u8> {
