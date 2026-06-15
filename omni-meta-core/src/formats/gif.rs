@@ -73,8 +73,8 @@ impl MetaParser for GifParser {
                     let rest = &input[pos..];
                     match rest.iter().position(|&b| b == 0) {
                         Some(zero) => {
-                            // 找到魔数尾起点以更精确截断包
-                            let magic = find_magic(rest);
+                            // 找到魔数尾起点以更精确截断包；搜索范围钳制到终止符前，保证 pkt_end <= zero
+                            let magic = find_magic(&rest[..zero]);
                             let pkt_end = magic.unwrap_or(zero);
                             let packet = &rest[..pkt_end];
                             events.push(Event::Payload { kind: PayloadKind::Xmp, data: packet });
@@ -84,7 +84,7 @@ impl MetaParser for GifParser {
                             continue;
                         }
                         None => {
-                            // 终止符还未到达——请求更多字节（consumed > 0 确保 driver 不认为零前进）
+                            // 终止符未到达：NeedBytes(avail+1) 对当前窗口不可满足，driver 据此索要更多字节，EOF 时记 Truncated。
                             return PullResult {
                                 demand: Demand::NeedBytes(rest.len() + 1),
                                 consumed: pos,
@@ -258,5 +258,35 @@ mod tests {
         let res = p.pull(b"NOTAGIFFFFFFF");
         assert_eq!(res.demand, Demand::Done);
         assert!(res.events.is_empty());
+    }
+
+    #[test]
+    fn gct_is_skipped() {
+        // packed=0x80 → GCT size = 3 * 2^((0&7)+1) = 6 bytes
+        let mut g = header_lsd(4, 4, true);
+        g.extend_from_slice(&[0u8; 6]); // Global Color Table
+        g.push(0x3B); // trailer
+        let col = collect(&g);
+        assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Gif);
+        assert_eq!(meta.unified.width, Some(4));
+        assert_eq!(meta.unified.height, Some(4));
+    }
+
+    #[test]
+    fn image_descriptor_with_lct_is_skipped() {
+        // header + image descriptor(0x2C) with Local Color Table, then image data sub-blocks, then trailer
+        let mut g = header_lsd(2, 2, false);
+        g.push(0x2C); // image separator
+        g.extend_from_slice(&[0, 0, 0, 0]); // left, top (2x u16 LE)
+        g.extend_from_slice(&2u16.to_le_bytes()); // width
+        g.extend_from_slice(&2u16.to_le_bytes()); // height
+        g.push(0x80); // packed: LCT present, size bits=0 → LCT = 3*2^1 = 6 bytes
+        g.extend_from_slice(&[0u8; 6]); // Local Color Table
+        g.push(0x02); // LZW minimum code size
+        g.push(0x00); // image data sub-block terminator (empty)
+        g.push(0x3B); // trailer
+        let col = collect(&g);
+        assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
     }
 }
