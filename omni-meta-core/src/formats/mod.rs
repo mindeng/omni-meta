@@ -1,3 +1,4 @@
+pub mod bmff;
 pub mod gif;
 pub mod jpeg;
 pub mod png;
