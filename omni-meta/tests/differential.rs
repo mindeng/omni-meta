@@ -442,22 +442,109 @@ fn differential_thumbnail_ifd() {
     assert_all_equal(&wrap_jpeg_tiff(&make_tiff_thumbnail()));
 }
 
-/// 最小 BMFF：ftyp(heic) + 一个尾随 free box（A1 全部忽略）。
+fn bmff_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&((payload.len() + 8) as u32).to_be_bytes());
+    b.extend_from_slice(kind);
+    b.extend_from_slice(payload);
+    b
+}
+
+fn bmff_infe(id: u16, typ: &[u8; 4], content_type: Option<&[u8]>) -> Vec<u8> {
+    let mut p = vec![2u8, 0, 0, 0];
+    p.extend_from_slice(&id.to_be_bytes());
+    p.extend_from_slice(&0u16.to_be_bytes());
+    p.extend_from_slice(typ);
+    p.push(0); // item_name = "" (spec 要求 v2/3 存在)
+    if let Some(ct) = content_type {
+        p.extend_from_slice(ct);
+        p.push(0);
+    }
+    bmff_box(b"infe", &p)
+}
+
+fn bmff_ispe(w: u32, h: u32) -> Vec<u8> {
+    let mut p = vec![0u8, 0, 0, 0];
+    p.extend_from_slice(&w.to_be_bytes());
+    p.extend_from_slice(&h.to_be_bytes());
+    bmff_box(b"ispe", &p)
+}
+
+fn bmff_meta(exif_off: u64, exif_len: u64, xmp_off: u64, xmp_len: u64) -> Vec<u8> {
+    let mut pitm_p = vec![0u8, 0, 0, 0];
+    pitm_p.extend_from_slice(&1u16.to_be_bytes());
+    let pitm = bmff_box(b"pitm", &pitm_p);
+
+    let mut iinf_p = vec![0u8, 0, 0, 0];
+    iinf_p.extend_from_slice(&2u16.to_be_bytes());
+    iinf_p.extend_from_slice(&bmff_infe(1, b"Exif", None));
+    iinf_p.extend_from_slice(&bmff_infe(2, b"mime", Some(b"application/rdf+xml")));
+    let iinf = bmff_box(b"iinf", &iinf_p);
+
+    let ipco = bmff_box(b"ipco", &bmff_ispe(4032, 3024));
+    let mut ipma_p = vec![0u8, 0, 0, 0];
+    ipma_p.extend_from_slice(&1u32.to_be_bytes());
+    ipma_p.extend_from_slice(&1u16.to_be_bytes());
+    ipma_p.push(1);
+    ipma_p.push(1);
+    let ipma = bmff_box(b"ipma", &ipma_p);
+    let mut iprp_p = Vec::new();
+    iprp_p.extend_from_slice(&ipco);
+    iprp_p.extend_from_slice(&ipma);
+    let iprp = bmff_box(b"iprp", &iprp_p);
+
+    let mut iloc_p = vec![0u8, 0, 0, 0];
+    iloc_p.push(0x44);
+    iloc_p.push(0x00);
+    iloc_p.extend_from_slice(&2u16.to_be_bytes());
+    for (id, off, len) in [(1u16, exif_off, exif_len), (2u16, xmp_off, xmp_len)] {
+        iloc_p.extend_from_slice(&id.to_be_bytes());
+        iloc_p.extend_from_slice(&0u16.to_be_bytes());
+        iloc_p.extend_from_slice(&1u16.to_be_bytes());
+        iloc_p.extend_from_slice(&(off as u32).to_be_bytes());
+        iloc_p.extend_from_slice(&(len as u32).to_be_bytes());
+    }
+    let iloc = bmff_box(b"iloc", &iloc_p);
+
+    let mut meta_p = vec![0u8, 0, 0, 0];
+    meta_p.extend_from_slice(&pitm);
+    meta_p.extend_from_slice(&iinf);
+    meta_p.extend_from_slice(&iprp);
+    meta_p.extend_from_slice(&iloc);
+    bmff_box(b"meta", &meta_p)
+}
+
+/// 完整 HEIC：ftyp + meta + mdat(exif, xmp)，method 0 绝对偏移指向 mdat。
 fn fixture_bmff_heic() -> Vec<u8> {
+    let mut exif = vec![0u8, 0, 0, 0]; // tiff_header_offset = 0
+    exif.extend_from_slice(&make_tiff());
+    let xmp = br#"<rdf:Description tiff:Make="Acme"/>"#.to_vec();
+
+    let mut ftyp_p = Vec::new();
+    ftyp_p.extend_from_slice(b"heic");
+    ftyp_p.extend_from_slice(&0u32.to_be_bytes());
+    ftyp_p.extend_from_slice(b"mif1");
+    let ftyp = bmff_box(b"ftyp", &ftyp_p);
+
+    let meta_probe = bmff_meta(0, exif.len() as u64, 0, xmp.len() as u64);
+    let base = ftyp.len() as u64 + meta_probe.len() as u64 + 8;
+    let meta = bmff_meta(base, exif.len() as u64, base + exif.len() as u64, xmp.len() as u64);
+    assert_eq!(meta.len(), meta_probe.len());
+
+    let mut mdat_payload = Vec::new();
+    mdat_payload.extend_from_slice(&exif);
+    mdat_payload.extend_from_slice(&xmp);
+    let mdat = bmff_box(b"mdat", &mdat_payload);
+
     let mut f = Vec::new();
-    // ftyp box: size=20
-    f.extend_from_slice(&20u32.to_be_bytes());
-    f.extend_from_slice(b"ftyp");
-    f.extend_from_slice(b"heic");
-    f.extend_from_slice(&0u32.to_be_bytes());
-    f.extend_from_slice(b"mif1");
-    // free box: size=8（仅头部）
-    f.extend_from_slice(&8u32.to_be_bytes());
-    f.extend_from_slice(b"free");
+    f.extend_from_slice(&ftyp);
+    f.extend_from_slice(&meta);
+    f.extend_from_slice(&mdat);
     f
 }
 
 #[test]
 fn differential_bmff_heic() {
+    // 四适配器对 SeekTo 抽取（meta 在前、数据在 mdat）逐字段一致。
     assert_all_equal(&fixture_bmff_heic());
 }

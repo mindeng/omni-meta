@@ -258,8 +258,9 @@ impl StreamDriver {
                     if p >= abs {
                         self.skip_remaining = p - abs;
                         self.drop_consumed();
-                        if self.skip_remaining == 0 {
-                            // 零前进 SeekTo 当前位置 → 防卡死。
+                        if self.skip_remaining == 0 && consumed == 0 {
+                            // 零前进 SeekTo 当前位置（consumed==0）→ 防卡死。
+                            // consumed>0 时允许：解析器合法地消费了数据后定位到下一目标。
                             self.collector.warnings.push(Warning {
                                 offset: abs,
                                 kind: WarnKind::Truncated,
@@ -411,6 +412,38 @@ mod tests {
         fn pull<'a>(&mut self, _input: &'a [u8]) -> PullResult<'a> {
             PullResult { demand: Demand::SeekTo(0), consumed: 0, events: Vec::new() }
         }
+    }
+
+    /// 消费 4 字节后 SeekTo 到紧邻的当前绝对位置（零间隔下一目标），再消费 4 字节 Done。
+    /// 模拟 BMFF 相邻 EXIF/XMP 抽取目标：consumed>0 的零跳 SeekTo 必须被允许，
+    /// 不得触发 SeekTo 防卡死守卫（该守卫仅在 consumed==0 时成立）。
+    struct ConsecutiveSeekParser {
+        step: u8,
+    }
+    impl MetaParser for ConsecutiveSeekParser {
+        fn pull<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
+            if input.len() < 4 {
+                return PullResult { demand: Demand::NeedBytes(4), consumed: 0, events: Vec::new() };
+            }
+            if self.step == 0 {
+                self.step = 1;
+                // 消费 4 字节，SeekTo 到绝对偏移 4 = 紧邻当前位置（零间隔）。
+                let events = vec![Event::Field(Field::Width(1))];
+                return PullResult { demand: Demand::SeekTo(4), consumed: 4, events };
+            }
+            let events = vec![Event::Field(Field::Height(2))];
+            PullResult { demand: Demand::Done, consumed: 4, events }
+        }
+    }
+
+    #[test]
+    fn stream_consecutive_zero_gap_seek_with_consumed_progresses() {
+        // consumed>0 的零跳 SeekTo（相邻目标）必须继续推进，而非被防卡死守卫误杀。
+        let bytes = [0u8; 8];
+        let col = run_stream(&[&bytes], alloc::boxed::Box::new(ConsecutiveSeekParser { step: 0 }));
+        assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
+        assert_eq!(col.width, Some(1));
+        assert_eq!(col.height, Some(2));
     }
 
     /// 模拟无容器大小的顶层走盒：先 Skip(4) 跳首盒，再在第二盒读 4 字节发 Width，
