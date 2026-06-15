@@ -73,12 +73,10 @@ fn parse_iinf(payload: &[u8]) -> Vec<Wanted> {
         }
     };
     let entries = &payload[cur.position()..];
-    let mut seen = 0u32;
-    for (hdr, infe_payload) in iter_child_boxes(entries) {
-        if seen >= count {
+    for (seen, (hdr, infe_payload)) in iter_child_boxes(entries).enumerate() {
+        if seen as u32 >= count {
             break;
         }
-        seen += 1;
         if &hdr.kind != b"infe" {
             continue;
         }
@@ -238,10 +236,10 @@ fn dims_via_ipma(payload: &[u8], primary: u32, props: &[Option<(u32, u32)>]) -> 
             } else {
                 (cur.u8()? & 0x7F) as usize
             };
-            if item_id == primary && idx >= 1 {
-                if let Some(Some(dims)) = props.get(idx - 1) {
-                    return Some(*dims);
-                }
+            if item_id == primary && idx >= 1
+                && let Some(Some(dims)) = props.get(idx - 1)
+            {
+                return Some(*dims);
             }
         }
     }
@@ -265,10 +263,10 @@ fn dims_from_iprp(iprp_payload: &[u8], primary: Option<u32>) -> Option<(u32, u32
     for (hdr, p) in iter_child_boxes(ipco) {
         props.push(if &hdr.kind == b"ispe" { parse_ispe(p) } else { None });
     }
-    if let (Some(ipma), Some(pid)) = (ipma_payload, primary) {
-        if let Some(dims) = dims_via_ipma(ipma, pid, &props) {
-            return Some(dims);
-        }
+    if let (Some(ipma), Some(pid)) = (ipma_payload, primary)
+        && let Some(dims) = dims_via_ipma(ipma, pid, &props)
+    {
+        return Some(dims);
     }
     // 兜底：恰好一个 ispe
     let mut found = None;
