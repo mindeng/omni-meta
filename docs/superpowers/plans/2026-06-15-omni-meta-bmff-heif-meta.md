@@ -1013,10 +1013,15 @@ impl BmffParser {
                     return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
                 }
             };
+            let header_len = hdr.header_len as usize;
+            if need < header_len {
+                // 畸形 meta：声明大小小于其自身头部 → 干净结束，绝不 panic。
+                self.done = true;
+                return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+            }
             if input.len() < need {
                 return PullResult { demand: Demand::NeedBytes(need), consumed: 0, events: Vec::new() };
             }
-            let header_len = hdr.header_len as usize;
             let plan = parse_meta(&input[header_len..need], self.pos);
             let mut events: Vec<Event<'a>> = Vec::new();
             if let Some((w, h)) = plan.dims {
