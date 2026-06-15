@@ -772,4 +772,152 @@ mod tests {
         assert_eq!(plan.warnings.len(), 1);
         assert_eq!(plan.warnings[0].kind, WarnKind::UnreachableSection);
     }
+
+    /// 最小 TIFF：II + 42 + IFD0(Make=Acme)。与 driver/webp 测试同款。
+    fn make_tiff() -> Vec<u8> {
+        let mut t = Vec::new();
+        t.extend_from_slice(b"II");
+        t.extend_from_slice(&42u16.to_le_bytes());
+        t.extend_from_slice(&8u32.to_le_bytes());
+        t.extend_from_slice(&1u16.to_le_bytes()); // 1 entry
+        t.extend_from_slice(&0x010Fu16.to_le_bytes()); // Make
+        t.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+        t.extend_from_slice(&5u32.to_le_bytes()); // count
+        t.extend_from_slice(&26u32.to_le_bytes()); // 值偏移
+        t.extend_from_slice(&0u32.to_le_bytes()); // next IFD
+        t.extend_from_slice(b"Acme\0");
+        t
+    }
+
+    fn ftyp_heic() -> Vec<u8> {
+        let mut p = Vec::new();
+        p.extend_from_slice(b"heic");
+        p.extend_from_slice(&0u32.to_be_bytes());
+        p.extend_from_slice(b"mif1");
+        box_bytes(b"ftyp", &p)
+    }
+
+    /// 构造 meta box（Exif=item1, xmp=item2, ispe 关联 item1）。method 0 时偏移为绝对值。
+    fn build_meta_method0(exif_off: u64, exif_len: u64, xmp_off: u64, xmp_len: u64) -> Vec<u8> {
+        let mut pitm_p = alloc::vec![0u8, 0, 0, 0];
+        pitm_p.extend_from_slice(&1u16.to_be_bytes());
+        let pitm = box_bytes(b"pitm", &pitm_p);
+
+        let mut iinf_p = alloc::vec![0u8, 0, 0, 0];
+        iinf_p.extend_from_slice(&2u16.to_be_bytes());
+        iinf_p.extend_from_slice(&infe(1, b"Exif", None));
+        iinf_p.extend_from_slice(&infe(2, b"mime", Some(b"application/rdf+xml")));
+        let iinf = box_bytes(b"iinf", &iinf_p);
+
+        let ipco = box_bytes(b"ipco", &ispe(4032, 3024));
+        let mut ipma_p = alloc::vec![0u8, 0, 0, 0];
+        ipma_p.extend_from_slice(&1u32.to_be_bytes());
+        ipma_p.extend_from_slice(&1u16.to_be_bytes());
+        ipma_p.push(1);
+        ipma_p.push(1);
+        let ipma = box_bytes(b"ipma", &ipma_p);
+        let mut iprp_p = Vec::new();
+        iprp_p.extend_from_slice(&ipco);
+        iprp_p.extend_from_slice(&ipma);
+        let iprp = box_bytes(b"iprp", &iprp_p);
+
+        let mut iloc_p = alloc::vec![0u8, 0, 0, 0]; // version 0 → method 0
+        iloc_p.push(0x44);
+        iloc_p.push(0x00);
+        iloc_p.extend_from_slice(&2u16.to_be_bytes());
+        for (id, off, len) in [(1u16, exif_off, exif_len), (2u16, xmp_off, xmp_len)] {
+            iloc_p.extend_from_slice(&id.to_be_bytes());
+            iloc_p.extend_from_slice(&0u16.to_be_bytes()); // dri
+            iloc_p.extend_from_slice(&1u16.to_be_bytes()); // extent_count
+            iloc_p.extend_from_slice(&(off as u32).to_be_bytes());
+            iloc_p.extend_from_slice(&(len as u32).to_be_bytes());
+        }
+        let iloc = box_bytes(b"iloc", &iloc_p);
+
+        let mut meta_p = alloc::vec![0u8, 0, 0, 0];
+        meta_p.extend_from_slice(&pitm);
+        meta_p.extend_from_slice(&iinf);
+        meta_p.extend_from_slice(&iprp);
+        meta_p.extend_from_slice(&iloc);
+        box_bytes(b"meta", &meta_p)
+    }
+
+    fn exif_item_block() -> Vec<u8> {
+        let mut b = alloc::vec![0u8, 0, 0, 0]; // tiff_header_offset = 0
+        b.extend_from_slice(&make_tiff());
+        b
+    }
+
+    /// 完整 HEIC：ftyp + meta + mdat(exif, xmp)。两遍：先测 meta 长度，再算绝对偏移。
+    fn heic_method0() -> Vec<u8> {
+        let exif = exif_item_block();
+        let xmp = br#"<rdf:Description tiff:Make="Acme"/>"#.to_vec();
+        let ftyp = ftyp_heic();
+        let meta_probe = build_meta_method0(0, exif.len() as u64, 0, xmp.len() as u64);
+        let base = ftyp.len() as u64 + meta_probe.len() as u64 + 8; // mdat 头 8 字节
+        let exif_off = base;
+        let xmp_off = base + exif.len() as u64;
+        let meta = build_meta_method0(exif_off, exif.len() as u64, xmp_off, xmp.len() as u64);
+        assert_eq!(meta.len(), meta_probe.len(), "两遍 meta 长度必须一致");
+        let mut mdat_payload = Vec::new();
+        mdat_payload.extend_from_slice(&exif);
+        mdat_payload.extend_from_slice(&xmp);
+        let mdat = box_bytes(b"mdat", &mdat_payload);
+        let mut f = Vec::new();
+        f.extend_from_slice(&ftyp);
+        f.extend_from_slice(&meta);
+        f.extend_from_slice(&mdat);
+        f
+    }
+
+    #[test]
+    fn end_to_end_heic_method0() {
+        let buf = heic_method0();
+        let col = crate::driver::drive_slice(&buf, &mut BmffParser::new(), crate::limits::Limits::default());
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Heif);
+        assert!(meta.warnings.is_empty(), "warnings: {:?}", meta.warnings);
+        assert_eq!(meta.unified.width, Some(4032));
+        assert_eq!(meta.unified.height, Some(3024));
+        assert!(meta.raw.exif.iter().any(|t| t.tag == 0x010F), "应抽到 Make 标签");
+        assert!(meta.raw.xmp.iter().any(|x| x.name == "Make" && x.value == "Acme"));
+    }
+
+    #[test]
+    fn end_to_end_heic_idat_method1() {
+        // meta 内嵌 idat：Exif item 数据放 idat，construction_method=1。
+        let exif = exif_item_block();
+        let pitm = {
+            let mut p = alloc::vec![0u8, 0, 0, 0];
+            p.extend_from_slice(&1u16.to_be_bytes());
+            box_bytes(b"pitm", &p)
+        };
+        let mut iinf_p = alloc::vec![0u8, 0, 0, 0];
+        iinf_p.extend_from_slice(&1u16.to_be_bytes());
+        iinf_p.extend_from_slice(&infe(1, b"Exif", None));
+        let iinf = box_bytes(b"iinf", &iinf_p);
+        let idat = box_bytes(b"idat", &exif);
+        let mut iloc_p = alloc::vec![1u8, 0, 0, 0]; // version 1（带 method）
+        iloc_p.push(0x44);
+        iloc_p.push(0x00);
+        iloc_p.extend_from_slice(&1u16.to_be_bytes()); // item_count
+        iloc_p.extend_from_slice(&1u16.to_be_bytes()); // id=1
+        iloc_p.extend_from_slice(&1u16.to_be_bytes()); // method=1
+        iloc_p.extend_from_slice(&0u16.to_be_bytes()); // dri
+        iloc_p.extend_from_slice(&1u16.to_be_bytes()); // extent_count
+        iloc_p.extend_from_slice(&0u32.to_be_bytes()); // idat 内偏移 0
+        iloc_p.extend_from_slice(&(exif.len() as u32).to_be_bytes()); // 长度
+        let iloc = box_bytes(b"iloc", &iloc_p);
+        let mut meta_p = alloc::vec![0u8, 0, 0, 0];
+        meta_p.extend_from_slice(&pitm);
+        meta_p.extend_from_slice(&iinf);
+        meta_p.extend_from_slice(&idat);
+        meta_p.extend_from_slice(&iloc);
+        let meta = box_bytes(b"meta", &meta_p);
+        let mut f = ftyp_heic();
+        f.extend_from_slice(&meta);
+        let col = crate::driver::drive_slice(&f, &mut BmffParser::new(), crate::limits::Limits::default());
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Heif);
+        assert!(meta.warnings.is_empty(), "warnings: {:?}", meta.warnings);
+        assert!(meta.raw.exif.iter().any(|t| t.tag == 0x010F), "idat 内联 Exif 应被抽到");
+    }
 }
