@@ -240,4 +240,52 @@ mod tests {
         assert_eq!(res.demand, Demand::Done);
         assert!(res.events.is_empty());
     }
+
+    fn riff_webp_container(chunk: &[u8]) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(b"WEBP");
+        body.extend_from_slice(chunk);
+        let mut f = Vec::new();
+        f.extend_from_slice(b"RIFF");
+        f.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        f.extend_from_slice(&body);
+        f
+    }
+
+    #[test]
+    fn vp8_simple_lossy_dimensions() {
+        // VP8 lossy: 10-byte prefix with start code [0x9d,0x01,0x2a]
+        // and width=320, height=240 as LE u16 at [6..8] and [8..10].
+        // 320 < 0x3FFF and 240 < 0x3FFF so the & 0x3FFF mask is a no-op.
+        let mut data = vec![0u8; 10];
+        data[3] = 0x9d;
+        data[4] = 0x01;
+        data[5] = 0x2a;
+        data[6..8].copy_from_slice(&320u16.to_le_bytes());
+        data[8..10].copy_from_slice(&240u16.to_le_bytes());
+
+        let buf = riff_webp_container(&riff_chunk(b"VP8 ", &data));
+        let col = collect(&buf);
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Webp);
+        assert_eq!(meta.unified.width, Some(320));
+        assert_eq!(meta.unified.height, Some(240));
+    }
+
+    #[test]
+    fn vp8l_lossless_dimensions() {
+        // VP8L lossless: data[0]=0x2f (signature), then 4 bytes = bits LE.
+        // bits = (w-1) | ((h-1) << 14)  for w=100, h=80:
+        //   bits = 99 | (79 << 14) = 99 | 1294336 = 1294435
+        let (w, h): (u32, u32) = (100, 80);
+        let bits: u32 = (w - 1) | ((h - 1) << 14);
+        let mut data = vec![0u8; 5];
+        data[0] = 0x2f;
+        data[1..5].copy_from_slice(&bits.to_le_bytes());
+
+        let buf = riff_webp_container(&riff_chunk(b"VP8L", &data));
+        let col = collect(&buf);
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Webp);
+        assert_eq!(meta.unified.width, Some(100));
+        assert_eq!(meta.unified.height, Some(80));
+    }
 }

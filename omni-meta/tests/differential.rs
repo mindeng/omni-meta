@@ -243,3 +243,31 @@ fn fixture_webp() -> Vec<u8> {
 fn differential_webp() {
     assert_all_equal(&fixture_webp());
 }
+
+fn fixture_webp_vp8l() -> Vec<u8> {
+    // VP8L lossless chunk: w=100, h=80.
+    // bits = (w-1) | ((h-1) << 14) = 99 | (79 << 14)
+    let (w, h): (u32, u32) = (100, 80);
+    let bits: u32 = (w - 1) | ((h - 1) << 14);
+    let mut vp8l_data = vec![0u8; 5];
+    vp8l_data[0] = 0x2f;
+    vp8l_data[1..5].copy_from_slice(&bits.to_le_bytes());
+
+    let xmp = riff_chunk(b"XMP ", br#"<rdf:Description tiff:Make="Acme"/>"#);
+
+    let mut body = Vec::new();
+    body.extend_from_slice(b"WEBP");
+    body.extend_from_slice(&riff_chunk(b"VP8L", &vp8l_data));
+    body.extend_from_slice(&xmp);
+
+    let mut f = Vec::new();
+    f.extend_from_slice(b"RIFF");
+    f.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    f.extend_from_slice(&body);
+    f
+}
+
+#[test]
+fn differential_webp_vp8l() {
+    assert_all_equal(&fixture_webp_vp8l());
+}
