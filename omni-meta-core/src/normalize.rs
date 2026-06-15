@@ -114,13 +114,19 @@ mod tests {
             exif: Vec::new(),
             xmp: Vec::from([
                 xmp("tiff", "Make", "XmpMake"),
+                xmp("tiff", "Model", "XmpModel"),
                 xmp("tiff", "Orientation", "6"),
+                xmp("tiff", "ImageWidth", "1280"),
+                xmp("tiff", "ImageLength", "720"),
             ]),
         };
         let mut warnings = Vec::new();
         let u = normalize(&raw, &mut warnings);
         assert_eq!(u.camera_make.as_deref(), Some("XmpMake"));
+        assert_eq!(u.camera_model.as_deref(), Some("XmpModel"));
         assert_eq!(u.orientation, Some(Orientation::Rotate90));
+        assert_eq!(u.width, Some(1280));
+        assert_eq!(u.height, Some(720));
     }
 
     #[test]

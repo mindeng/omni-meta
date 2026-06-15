@@ -633,6 +633,35 @@ mod tests {
         );
     }
 
+    /// 发 容器维度 Field + 含冲突 tiff:ImageWidth/Length 的 XMP，验证容器维度胜出。
+    struct DimConflictEmitter;
+    impl MetaParser for DimConflictEmitter {
+        fn pull<'a>(&mut self, input: &'a [u8]) -> crate::demand::PullResult<'a> {
+            use crate::demand::PullResult;
+            let events = vec![
+                Event::Field(Field::Width(1920)),
+                Event::Field(Field::Height(1080)),
+                Event::Payload {
+                    kind: PayloadKind::Xmp,
+                    data: br#"<rdf:Description tiff:ImageWidth="999" tiff:ImageLength="888"/>"#,
+                },
+            ];
+            PullResult { demand: Demand::Done, consumed: input.len(), events }
+        }
+    }
+
+    #[test]
+    fn container_dims_beat_xmp_dims() {
+        let buf = [0u8; 4];
+        let mut p = DimConflictEmitter;
+        let col = drive_slice(&buf, &mut p, Limits::default());
+        let meta = finalize(col, FileFormat::Png);
+        assert_eq!(meta.unified.width, Some(1920));  // 容器值胜出，非 XMP 的 999
+        assert_eq!(meta.unified.height, Some(1080));
+        // XMP 仍保留在 raw 层
+        assert!(meta.raw.xmp.iter().any(|x| x.name == "ImageWidth" && x.value == "999"));
+    }
+
     fn make_tiff() -> Vec<u8> {
         let mut t: Vec<u8> = Vec::new();
         t.extend_from_slice(b"II");
