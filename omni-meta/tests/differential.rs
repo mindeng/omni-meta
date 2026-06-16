@@ -765,3 +765,184 @@ fn differential_mkv() {
 fn differential_ebml_unknown_size_segment() {
     assert_all_equal(&fixture_ebml_unknown_size_segment());
 }
+
+// ---- GPS 差分测试 ----
+
+/// 构造 QuickTime mdta meta 载荷：hdlr(mdta) + keys + ilst。
+/// 移植自 omni-meta-core/src/formats/bmff.rs 的同名测试辅助函数。
+fn qt_meta_with_keys_local(keys_and_vals: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut hdlr = Vec::new();
+    hdlr.extend_from_slice(&[0u8; 8]); // version/flags + pre_defined
+    hdlr.extend_from_slice(b"mdta");   // handler_type
+    hdlr.extend_from_slice(&[0u8; 12]); // reserved(3*4)
+    hdlr.push(0);                       // name 空
+
+    let mut keys_payload = Vec::new();
+    keys_payload.extend_from_slice(&[0u8; 4]); // version/flags
+    keys_payload.extend_from_slice(&(keys_and_vals.len() as u32).to_be_bytes()); // entry_count
+    for (k, _) in keys_and_vals {
+        let entry_size = 8 + k.len();
+        keys_payload.extend_from_slice(&(entry_size as u32).to_be_bytes());
+        keys_payload.extend_from_slice(b"mdta"); // namespace
+        keys_payload.extend_from_slice(k.as_bytes());
+    }
+
+    let mut ilst = Vec::new();
+    for (i, (_, v)) in keys_and_vals.iter().enumerate() {
+        let idx = (i as u32) + 1;
+        let mut data_payload = Vec::new();
+        data_payload.extend_from_slice(&[0u8; 4]); // type
+        data_payload.extend_from_slice(&[0u8; 4]); // locale
+        data_payload.extend_from_slice(v);
+        let data_box = bmff_box(b"data", &data_payload);
+        let item_inner_size = 8 + data_box.len();
+        let mut item_box = Vec::new();
+        item_box.extend_from_slice(&(item_inner_size as u32).to_be_bytes());
+        item_box.extend_from_slice(&idx.to_be_bytes()); // box "kind" = 索引
+        item_box.extend_from_slice(&data_box);
+        ilst.extend_from_slice(&item_box);
+    }
+
+    let mut meta = Vec::new();
+    meta.extend_from_slice(&bmff_box(b"hdlr", &hdlr));
+    meta.extend_from_slice(&bmff_box(b"keys", &keys_payload));
+    meta.extend_from_slice(&bmff_box(b"ilst", &ilst));
+    meta
+}
+
+/// 构造 .MOV 文件（ftyp qt + moov{ mvhd, udta{©xyz}, meta{mdta make/model} }）。
+/// ©xyz lat=+35.0000 lon=+139.0000 → lat_e7 应为 350_000_000。
+fn build_mov_with_gps_and_mdta() -> Vec<u8> {
+    // ftyp: brand=qt
+    let mut ftyp_p = Vec::new();
+    ftyp_p.extend_from_slice(b"qt  ");
+    ftyp_p.extend_from_slice(&0u32.to_be_bytes()); // minor_version
+    let ftyp = bmff_box(b"ftyp", &ftyp_p);
+
+    // ©xyz payload: u16 size + u16 lang + ISO6709 text
+    let xyz_text = b"+35.0000+139.0000/";
+    let mut xyz_payload = Vec::new();
+    xyz_payload.extend_from_slice(&(xyz_text.len() as u16).to_be_bytes());
+    xyz_payload.extend_from_slice(&0u16.to_be_bytes()); // lang
+    xyz_payload.extend_from_slice(xyz_text);
+
+    let mut udta = Vec::new();
+    udta.extend_from_slice(&bmff_box(b"\xA9xyz", &xyz_payload));
+
+    // mdta meta: make=Apple, model=iPhone 15
+    let meta_payload = qt_meta_with_keys_local(&[
+        ("com.apple.quicktime.make", b"Apple"),
+        ("com.apple.quicktime.model", b"iPhone 15"),
+    ]);
+
+    // mvhd v0: creation=2_082_844_800, timescale=600, duration=600
+    let mvhd_p = mp4_mvhd_v0(2_082_844_800, 600, 600);
+
+    let mut moov_p = Vec::new();
+    moov_p.extend_from_slice(&bmff_box(b"mvhd", &mvhd_p));
+    moov_p.extend_from_slice(&bmff_box(b"udta", &udta));
+    moov_p.extend_from_slice(&bmff_box(b"meta", &meta_payload));
+    let moov = bmff_box(b"moov", &moov_p);
+
+    let mut f = Vec::new();
+    f.extend_from_slice(&ftyp);
+    f.extend_from_slice(&moov);
+    f
+}
+
+/// 构造含 GPS IFD 的 JPEG/EXIF TIFF。
+/// IFD0 → GPS sub-IFD(0x8825) → lat_ref="N", lat=35°, lon_ref="E", lon=139°。
+fn build_jpeg_with_gps_ifd() -> Vec<u8> {
+    // Little-endian TIFF layout:
+    // 0x00: "II" + 42 + IFD0_offset(8)
+    // IFD0 @8: 1 entry (GPS IFD pointer 0x8825 → 26)
+    // GPS IFD @26: 4 entries (lat_ref, lat, lon_ref, lon)
+    //   Data at 80: lat 3×RATIONAL (24 bytes), lon 3×RATIONAL (24 bytes)
+    let mut t: Vec<u8> = Vec::new();
+    // TIFF header
+    t.extend_from_slice(b"II");
+    t.extend_from_slice(&42u16.to_le_bytes());
+    t.extend_from_slice(&8u32.to_le_bytes()); // IFD0 at 8
+
+    // IFD0 @8: 1 entry
+    t.extend_from_slice(&1u16.to_le_bytes()); // entry count
+    // Entry: tag=0x8825(GPS IFD), type=4(LONG), count=1, value=26(GPS IFD offset)
+    t.extend_from_slice(&0x8825u16.to_le_bytes());
+    t.extend_from_slice(&4u16.to_le_bytes());  // LONG
+    t.extend_from_slice(&1u32.to_le_bytes());  // count
+    t.extend_from_slice(&26u32.to_le_bytes()); // → GPS IFD at 26
+    t.extend_from_slice(&0u32.to_le_bytes());  // next IFD = 0
+    // IFD0 ends at 8 + 2 + 12 + 4 = 26 ✓
+
+    // GPS IFD @26: 4 entries
+    t.extend_from_slice(&4u16.to_le_bytes()); // entry count
+    // Data for large values (RATIONAL×3 = 24 bytes each) starts after GPS IFD:
+    // GPS IFD size = 2 + 4×12 + 4 = 54 bytes → data starts at 26+54=80
+    let lat_data_offset: u32 = 80;
+    let lon_data_offset: u32 = 80 + 24; // = 104
+
+    // Entry 1: GPSLatitudeRef (0x0001), ASCII, count=2, inline value "N\0"
+    t.extend_from_slice(&0x0001u16.to_le_bytes());
+    t.extend_from_slice(&2u16.to_le_bytes());  // ASCII
+    t.extend_from_slice(&2u32.to_le_bytes());  // count (includes NUL)
+    t.extend_from_slice(b"N\0\0\0");           // inline (LE, padded to 4)
+
+    // Entry 2: GPSLatitude (0x0002), RATIONAL, count=3, data at lat_data_offset
+    t.extend_from_slice(&0x0002u16.to_le_bytes());
+    t.extend_from_slice(&5u16.to_le_bytes());              // RATIONAL
+    t.extend_from_slice(&3u32.to_le_bytes());              // count
+    t.extend_from_slice(&lat_data_offset.to_le_bytes());   // offset
+
+    // Entry 3: GPSLongitudeRef (0x0003), ASCII, count=2, inline value "E\0"
+    t.extend_from_slice(&0x0003u16.to_le_bytes());
+    t.extend_from_slice(&2u16.to_le_bytes());  // ASCII
+    t.extend_from_slice(&2u32.to_le_bytes());  // count
+    t.extend_from_slice(b"E\0\0\0");           // inline (LE, padded to 4)
+
+    // Entry 4: GPSLongitude (0x0004), RATIONAL, count=3, data at lon_data_offset
+    t.extend_from_slice(&0x0004u16.to_le_bytes());
+    t.extend_from_slice(&5u16.to_le_bytes());              // RATIONAL
+    t.extend_from_slice(&3u32.to_le_bytes());              // count
+    t.extend_from_slice(&lon_data_offset.to_le_bytes());   // offset
+
+    t.extend_from_slice(&0u32.to_le_bytes()); // GPS IFD next = 0
+    // GPS IFD ends at 26 + 2 + 48 + 4 = 80 ✓
+
+    debug_assert_eq!(t.len(), 80, "data section should start at offset 80");
+
+    // Data @80: lat = 35°0'0" (3 RATIONALs: 35/1, 0/1, 0/1)
+    t.extend_from_slice(&35u32.to_le_bytes());
+    t.extend_from_slice(&1u32.to_le_bytes());
+    t.extend_from_slice(&0u32.to_le_bytes());
+    t.extend_from_slice(&1u32.to_le_bytes());
+    t.extend_from_slice(&0u32.to_le_bytes());
+    t.extend_from_slice(&1u32.to_le_bytes());
+    // Data @104: lon = 139°0'0" (3 RATIONALs: 139/1, 0/1, 0/1)
+    t.extend_from_slice(&139u32.to_le_bytes());
+    t.extend_from_slice(&1u32.to_le_bytes());
+    t.extend_from_slice(&0u32.to_le_bytes());
+    t.extend_from_slice(&1u32.to_le_bytes());
+    t.extend_from_slice(&0u32.to_le_bytes());
+    t.extend_from_slice(&1u32.to_le_bytes());
+
+    wrap_jpeg_tiff(&t)
+}
+
+#[test]
+fn gps_mov_mdta_consistent_across_adapters() {
+    let bytes = build_mov_with_gps_and_mdta();
+    let m = read_slice(&bytes, Options::default()).unwrap();
+    assert_eq!(m.unified.gps.map(|g| g.lat_e7), Some(350_000_000));
+    assert_eq!(m.unified.camera_make.as_deref(), Some("Apple"));
+    assert_all_equal(&bytes);
+}
+
+#[test]
+fn gps_jpeg_exif_consistent_across_adapters() {
+    let bytes = build_jpeg_with_gps_ifd();
+    let m = read_slice(&bytes, Options::default()).unwrap();
+    let g = m.unified.gps.expect("gps 应被投影");
+    assert_eq!(g.lat_e7, 350_000_000);
+    assert_eq!(g.lon_e7, 1_390_000_000);
+    assert_all_equal(&bytes);
+}
