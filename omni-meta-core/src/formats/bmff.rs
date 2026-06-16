@@ -171,7 +171,8 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovI
                 }
             }
             b"meta" => {
-                let m = parse_qt_mdta(p, max_tags);
+                let remaining = max_tags.saturating_sub(mdta.tags.len());
+                let m = parse_qt_mdta(p, remaining);
                 if mdta.gps.is_none() { mdta.gps = m.gps; }
                 if mdta.make.is_none() { mdta.make = m.make; }
                 if mdta.model.is_none() { mdta.model = m.model; }
@@ -188,7 +189,8 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovI
     // make/model：mdta 唯一视频来源。
     info.camera_make = mdta.make;
     info.camera_model = mdta.model;
-    // 各来源已独立封顶（峰值 ≤ 2×max_tags）；合并后再裁到 max_tags，使合并总量精确有界。
+    // 各来源已独立封顶：mdta 用递减预算（峰值 ≤ max_tags），udta 逐条守卫（≤ max_tags）；
+    // 峰值 ≤ 2×max_tags（与 meta 盒数无关）；合并后再裁到 max_tags，使合并总量精确有界。
     info.container_tags = mdta.tags;
     info.container_tags.append(&mut udta_tags);
     info.container_tags.truncate(max_tags);
@@ -2156,5 +2158,20 @@ mod tests {
         moov_p.extend_from_slice(&box_bytes(b"udta", &udta));
         let info = parse_moov(&moov_p, 0, 2);
         assert!(info.container_tags.len() <= 2, "udta 源头封顶 ≤ 2，实际 {}", info.container_tags.len());
+    }
+
+    #[test]
+    fn parse_moov_multi_meta_bounded_by_budget() {
+        // 多个 meta 兄弟盒，每个含多个文本键；预算 3 → 跨盒累积仍 ≤ 3（峰值不随 meta 盒数放大）。
+        let mut moov_p = alloc::vec::Vec::new();
+        for _ in 0..4 {
+            let meta = qt_meta_with_typed_keys(&[
+                ("com.apple.quicktime.a", 1, b"x"),
+                ("com.apple.quicktime.b", 1, b"y"),
+            ]);
+            moov_p.extend_from_slice(&box_bytes(b"meta", &meta));
+        }
+        let info = parse_moov(&moov_p, 0, 3);
+        assert!(info.container_tags.len() <= 3, "跨多 meta 盒仍受预算限，实际 {}", info.container_tags.len());
     }
 }
