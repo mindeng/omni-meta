@@ -145,6 +145,7 @@ IPTC codec · ICC 摘要 · TIFF 顶层格式 · async/tokio 适配器 · Stripp
 - [ ] **no_std CI**：每个里程碑验证 `--no-default-features`
 - [ ] **黄金样本**：真实小样本 + 期望 `Metadata` 快照
 - [ ] **待评估：视频朝向（orientation）** — 解析 `tkhd` 变换矩阵（当前 `parse_tkhd` 跳过矩阵区、只取末 8 字节维度）→ 推导旋转 → 投影 `Unified.orientation`（图像 EXIF orientation 作第二来源，可凑 ≥2）。与 QuickTime `video-orientation` 键是同一语义的两个来源，需一并评估优先级。
+- [ ] **待评估：容器元数据投影收敛** — 待 `Event::ContainerTag` 落地后，考虑把现走 parser 侧 `Event::Field` 发射的 mdta 专属投影（`gps`/`make`/`model`/`created`）改由 normalize 从 `RawTags.container` 统一解释，使「容器元数据→Unified」全走一条路（normalize 权威 + 跨来源定优先级）。结构头字段（`tkhd`/`mvhd`/`ispe`/IHDR/EBML 维度等）仍留在 `Field`——它们无命名空间、parser 权威。
 
 ---
 
