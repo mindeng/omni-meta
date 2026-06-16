@@ -5,8 +5,8 @@ use alloc::boxed::Box;
 use crate::demand::MetaParser;
 use crate::model::FileFormat;
 
-/// 各格式签名最长字节数（WebP "RIFF"+4+"WEBP" = 12）。
-pub(crate) const PROBE_MAX: usize = 12;
+/// 探测窗口上界：EBML DocType（区分 MKV/WebM）可能落在头部数十字节内。
+pub(crate) const PROBE_MAX: usize = 64;
 // 编译期断言：PROBE_MAX 必须覆盖最长签名（WebP = 12 字节）。
 const _: () = assert!(PROBE_MAX >= 12);
 
@@ -29,6 +29,10 @@ pub fn probe(buf: &[u8]) -> FileFormat {
     if buf.len() >= 12 && &buf[4..8] == b"ftyp" {
         return brand_to_format(&buf[8..12]);
     }
+    // EBML（Matroska/WebM）：魔数 1A45DFA3 在偏移 0。
+    if buf.len() >= 4 && buf[0..4] == [0x1A, 0x45, 0xDF, 0xA3] {
+        return ebml_format(buf);
+    }
     FileFormat::Unknown
 }
 
@@ -44,6 +48,36 @@ fn brand_to_format(brand: &[u8]) -> FileFormat {
     }
 }
 
+/// 魔数已匹配。在已缓冲头部内定位 DocType → Mkv/Webm；尚不可见且未达 PROBE_MAX
+/// → Unknown（请求更多字节）；达 PROBE_MAX 仍无 → 默认 Mkv（给出确定答案）。
+fn ebml_format(buf: &[u8]) -> FileFormat {
+    if let Some(dt) = find_doctype(buf) {
+        return if dt == b"webm" { FileFormat::Webm } else { FileFormat::Mkv };
+    }
+    if buf.len() >= PROBE_MAX {
+        return FileFormat::Mkv;
+    }
+    FileFormat::Unknown
+}
+
+/// 在前 PROBE_MAX 字节内查找 DocType 元素（ID 0x42 0x82）并读取其字符串值。
+/// 元素存在但字符串尚未完整缓冲 → None（继续等待）。
+fn find_doctype(buf: &[u8]) -> Option<&[u8]> {
+    let scan = &buf[..buf.len().min(PROBE_MAX)];
+    let mut i = 0usize;
+    while i + 1 < scan.len() {
+        if scan[i] == 0x42 && scan[i + 1] == 0x82 {
+            let rest = &scan[i + 2..];
+            let (size, szlen) = crate::containers::ebml::read_elem_size(rest)?;
+            let size = usize::try_from(size?).ok()?;
+            let end = szlen.checked_add(size)?;
+            return rest.get(szlen..end);
+        }
+        i += 1;
+    }
+    None
+}
+
 /// 把已探测的格式映射到对应解析器。Unknown / 尚未实现的格式 → None。
 pub(crate) fn parser_for(fmt: FileFormat) -> Option<Box<dyn MetaParser>> {
     match fmt {
@@ -53,6 +87,9 @@ pub(crate) fn parser_for(fmt: FileFormat) -> Option<Box<dyn MetaParser>> {
         FileFormat::Gif => Some(Box::new(crate::formats::gif::GifParser::new())),
         FileFormat::Heif | FileFormat::Avif | FileFormat::Mp4 | FileFormat::Mov => {
             Some(Box::new(crate::formats::bmff::BmffParser::new()))
+        }
+        FileFormat::Mkv | FileFormat::Webm => {
+            Some(Box::new(crate::formats::ebml::EbmlParser::new()))
         }
         _ => None,
     }
@@ -132,6 +169,27 @@ mod tests {
         assert!(parser_for(FileFormat::Avif).is_some());
         assert!(parser_for(FileFormat::Mp4).is_some());
         assert!(parser_for(FileFormat::Mov).is_some());
+    }
+
+    fn ebml(doctype: &[u8]) -> alloc::vec::Vec<u8> {
+        // EBML 头 { DocType } —— 用 8 字节 vint size 编码
+        let mut dt = alloc::vec::Vec::new();
+        dt.extend_from_slice(&[0x42, 0x82, 0x01]);
+        dt.extend_from_slice(&(doctype.len() as u64).to_be_bytes()[1..]);
+        dt.extend_from_slice(doctype);
+        let mut hdr = alloc::vec::Vec::new();
+        hdr.extend_from_slice(&[0x1A, 0x45, 0xDF, 0xA3, 0x01]);
+        hdr.extend_from_slice(&(dt.len() as u64).to_be_bytes()[1..]);
+        hdr.extend_from_slice(&dt);
+        hdr
+    }
+
+    #[test]
+    fn detects_mkv_and_webm_via_doctype() {
+        assert_eq!(probe(&ebml(b"webm")), FileFormat::Webm);
+        assert_eq!(probe(&ebml(b"matroska")), FileFormat::Mkv);
+        assert!(parser_for(FileFormat::Mkv).is_some());
+        assert!(parser_for(FileFormat::Webm).is_some());
     }
 
     #[test]
