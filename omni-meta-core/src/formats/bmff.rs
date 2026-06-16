@@ -107,6 +107,7 @@ struct MoovInfo {
     camera_make: Option<alloc::string::String>,
     camera_model: Option<alloc::string::String>,
     warnings: Vec<Warning>,
+    container_tags: Vec<ContainerTag>,
 }
 
 /// 解析 `moov` 载荷：mvhd → 时长/创建时间；逐 trak → tkhd 取首个非零维度。
@@ -121,10 +122,12 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64) -> MoovInfo {
         camera_make: None,
         camera_model: None,
         warnings: Vec::new(),
+        container_tags: Vec::new(),
     };
     let mut xyz_gps: Option<Gps> = None;
     let mut loci_gps: Option<Gps> = None;
     let mut mdta = QtMdta { gps: None, make: None, model: None, created: None, tags: alloc::vec::Vec::new() };
+    let mut udta_tags: Vec<ContainerTag> = Vec::new();
     for (hdr, p) in iter_child_boxes(moov_payload) {
         match &hdr.kind {
             b"mvhd" => {
@@ -150,6 +153,15 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64) -> MoovInfo {
                     match &uhdr.kind {
                         b"\xA9xyz" if xyz_gps.is_none() => xyz_gps = parse_xyz(up),
                         b"loci" if loci_gps.is_none() => loci_gps = parse_loci(up),
+                        k if k[0] == 0xA9 => {
+                            if let (Some(key), Some(text)) = (udta_key_string(k), parse_udta_text(up)) {
+                                udta_tags.push(ContainerTag {
+                                    source: ContainerSource::Udta,
+                                    key,
+                                    value: Value::Text(alloc::string::String::from(text)),
+                                });
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -160,6 +172,7 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64) -> MoovInfo {
                 if mdta.make.is_none() { mdta.make = m.make; }
                 if mdta.model.is_none() { mdta.model = m.model; }
                 if mdta.created.is_none() { mdta.created = m.created; }
+                mdta.tags.extend(m.tags);
             }
             _ => {}
         }
@@ -171,6 +184,8 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64) -> MoovInfo {
     // make/model：mdta 唯一视频来源。
     info.camera_make = mdta.make;
     info.camera_model = mdta.model;
+    info.container_tags = mdta.tags;
+    info.container_tags.append(&mut udta_tags);
     info
 }
 
@@ -701,6 +716,9 @@ impl BmffParser {
             if let Some(model) = info.camera_model {
                 events.push(Event::Field(Field::CameraModel(model)));
             }
+            for t in info.container_tags {
+                events.push(Event::ContainerTag(t));
+            }
             for warn in info.warnings {
                 events.push(Event::Warning(warn));
             }
@@ -855,6 +873,28 @@ fn parse_loci(payload: &[u8]) -> Option<Gps> {
         lon_e7: fixed16_16_to_e7(lon_raw)?,
         alt_mm: fixed16_16_to_mm(alt_raw),
     })
+}
+
+/// udta ©-atom 的 FourCC → key 串：首字节 0xA9 映射为 '©'(U+00A9)，后 3 字节须 ASCII。
+fn udta_key_string(kind: &[u8; 4]) -> Option<alloc::string::String> {
+    if kind[0] != 0xA9 {
+        return None;
+    }
+    let mut s = alloc::string::String::from("©");
+    for &c in &kind[1..] {
+        if !c.is_ascii() {
+            return None;
+        }
+        s.push(c as char);
+    }
+    Some(s)
+}
+
+/// 解析 udta ©-atom 文本载荷：u16 size + u16 lang + text。越界/非 UTF-8 → None。
+fn parse_udta_text(payload: &[u8]) -> Option<&str> {
+    let size = u16::from_be_bytes(payload.get(0..2)?.try_into().ok()?) as usize;
+    let text = payload.get(4..4 + size)?;
+    core::str::from_utf8(text).ok()
 }
 
 /// 解析 `©xyz` 载荷：u16 size + u16 lang + ISO6709 文本。越界/非 UTF-8 → None。
@@ -1995,5 +2035,51 @@ mod tests {
             Some(Value::U32(28))));
         assert!(find("com.apple.quicktime.junkbinary").is_none(), "二进制类型不收");
         assert!(out.tags.iter().all(|t| t.source == ContainerSource::QuickTimeMdta));
+    }
+
+    #[test]
+    fn parse_moov_collects_udta_and_mdta_container_tags() {
+        use crate::model::{ContainerSource, Value};
+        // udta { ©swr="MyCam 1.0" }
+        let swr_text = b"MyCam 1.0";
+        let mut swr_payload = alloc::vec::Vec::new();
+        swr_payload.extend_from_slice(&(swr_text.len() as u16).to_be_bytes());
+        swr_payload.extend_from_slice(&0u16.to_be_bytes()); // lang
+        swr_payload.extend_from_slice(swr_text);
+        let udta = box_bytes(b"\xA9swr", &swr_payload);
+
+        // meta { mdta software }
+        let meta = qt_meta_with_typed_keys(&[
+            ("com.apple.quicktime.software", 1, b"13.5.1"),
+        ]);
+
+        let mut moov_p = alloc::vec::Vec::new();
+        moov_p.extend_from_slice(&box_bytes(b"udta", &udta));
+        moov_p.extend_from_slice(&box_bytes(b"meta", &meta));
+        let info = parse_moov(&moov_p, 0);
+
+        let find = |src: ContainerSource, k: &str| info.container_tags.iter()
+            .find(|t| t.source == src && t.key == k);
+        assert!(matches!(find(ContainerSource::Udta, "©swr").map(|t| &t.value),
+            Some(Value::Text(s)) if s == "MyCam 1.0"));
+        assert!(matches!(find(ContainerSource::QuickTimeMdta, "com.apple.quicktime.software").map(|t| &t.value),
+            Some(Value::Text(s)) if s == "13.5.1"));
+    }
+
+    #[test]
+    fn end_to_end_mov_container_tags_reach_raw() {
+        let meta = qt_meta_with_typed_keys(&[
+            ("com.apple.quicktime.software", 1, b"13.5.1"),
+        ]);
+        let mut moov_p = alloc::vec::Vec::new();
+        moov_p.extend_from_slice(&box_bytes(b"meta", &meta));
+        let mut f = ftyp_mp4();
+        f.extend_from_slice(&box_bytes(b"moov", &moov_p));
+
+        let col = crate::driver::drive_slice(&f, &mut BmffParser::new(), crate::limits::Limits::default());
+        let meta_out = crate::driver::finalize(col, crate::model::FileFormat::Mov);
+        assert!(meta_out.raw.container.iter().any(|t|
+            t.key == "com.apple.quicktime.software"
+            && matches!(&t.value, crate::model::Value::Text(s) if s == "13.5.1")));
     }
 }
