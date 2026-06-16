@@ -946,3 +946,74 @@ fn gps_jpeg_exif_consistent_across_adapters() {
     assert_eq!(g.lon_e7, 1_390_000_000);
     assert_all_equal(&bytes);
 }
+
+fn qt_meta_typed(items: &[(&str, u32, &[u8])]) -> Vec<u8> {
+    let mut hdlr = Vec::new();
+    hdlr.extend_from_slice(&[0u8; 8]);
+    hdlr.extend_from_slice(b"mdta");
+    hdlr.extend_from_slice(&[0u8; 12]);
+    hdlr.push(0);
+    let mut keys = Vec::new();
+    keys.extend_from_slice(&[0u8; 4]);
+    keys.extend_from_slice(&(items.len() as u32).to_be_bytes());
+    for (k, _, _) in items {
+        keys.extend_from_slice(&((8 + k.len()) as u32).to_be_bytes());
+        keys.extend_from_slice(b"mdta");
+        keys.extend_from_slice(k.as_bytes());
+    }
+    let mut ilst = Vec::new();
+    for (i, (_, ty, v)) in items.iter().enumerate() {
+        let idx = (i as u32) + 1;
+        let mut data = Vec::new();
+        data.extend_from_slice(&ty.to_be_bytes());
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(v);
+        let data_box = bmff_box(b"data", &data);
+        let mut item = Vec::new();
+        item.extend_from_slice(&((8 + data_box.len()) as u32).to_be_bytes());
+        item.extend_from_slice(&idx.to_be_bytes());
+        item.extend_from_slice(&data_box);
+        ilst.extend_from_slice(&item);
+    }
+    let mut meta = Vec::new();
+    meta.extend_from_slice(&bmff_box(b"hdlr", &hdlr));
+    meta.extend_from_slice(&bmff_box(b"keys", &keys));
+    meta.extend_from_slice(&bmff_box(b"ilst", &ilst));
+    meta
+}
+
+fn fixture_bmff_mp4_container_tags() -> Vec<u8> {
+    let mut ftyp_p = Vec::new();
+    ftyp_p.extend_from_slice(b"isom");
+    ftyp_p.extend_from_slice(&0u32.to_be_bytes());
+    ftyp_p.extend_from_slice(b"mp42");
+    let ftyp = bmff_box(b"ftyp", &ftyp_p);
+
+    // udta { ©swr }
+    let swr_text = b"MyCam 1.0";
+    let mut swr_payload = Vec::new();
+    swr_payload.extend_from_slice(&(swr_text.len() as u16).to_be_bytes());
+    swr_payload.extend_from_slice(&0u16.to_be_bytes());
+    swr_payload.extend_from_slice(swr_text);
+    let udta = bmff_box(b"\xA9swr", &swr_payload);
+
+    let meta = qt_meta_typed(&[
+        ("com.apple.quicktime.software", 1, b"13.5.1"),
+        ("com.apple.quicktime.author", 1, b"Jane"),
+    ]);
+
+    let mut moov_p = Vec::new();
+    moov_p.extend_from_slice(&bmff_box(b"mvhd", &mp4_mvhd_v0(2_082_844_800, 600, 900_900)));
+    moov_p.extend_from_slice(&bmff_box(b"udta", &udta));
+    moov_p.extend_from_slice(&bmff_box(b"meta", &meta));
+    let moov = bmff_box(b"moov", &moov_p);
+
+    let mut f = ftyp;
+    f.extend_from_slice(&moov);
+    f
+}
+
+#[test]
+fn differential_bmff_mp4_container_tags() {
+    assert_all_equal(&fixture_bmff_mp4_container_tags());
+}
