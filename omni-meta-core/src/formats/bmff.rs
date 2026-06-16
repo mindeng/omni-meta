@@ -98,18 +98,33 @@ fn read_u32_at(b: &[u8], off: usize) -> Option<u32> {
     Some(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
 }
 
-/// moov 解析产物。
+/// moov 解析产物：维度、时长、创建时间、GPS、make/model、警告。
 struct MoovInfo {
     dims: Option<(u32, u32)>,
     duration_ms: Option<u64>,
     created: Option<DateTimeParts>,
+    gps: Option<Gps>,
+    camera_make: Option<alloc::string::String>,
+    camera_model: Option<alloc::string::String>,
     warnings: Vec<Warning>,
 }
 
 /// 解析 `moov` 载荷：mvhd → 时长/创建时间；逐 trak → tkhd 取首个非零维度。
+/// 亦下钻 udta（©xyz/loci）与 meta（QuickTime mdta）取 GPS/make/model/creationdate。
 /// `moov_abs_base` 仅用于警告偏移保真。深度 2 显式迭代，非递归。
 fn parse_moov(moov_payload: &[u8], moov_abs_base: u64) -> MoovInfo {
-    let mut info = MoovInfo { dims: None, duration_ms: None, created: None, warnings: Vec::new() };
+    let mut info = MoovInfo {
+        dims: None,
+        duration_ms: None,
+        created: None,
+        gps: None,
+        camera_make: None,
+        camera_model: None,
+        warnings: Vec::new(),
+    };
+    let mut xyz_gps: Option<Gps> = None;
+    let mut loci_gps: Option<Gps> = None;
+    let mut mdta = QtMdta { gps: None, make: None, model: None, created: None };
     for (hdr, p) in iter_child_boxes(moov_payload) {
         match &hdr.kind {
             b"mvhd" => {
@@ -130,9 +145,32 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64) -> MoovInfo {
                     }
                 }
             }
+            b"udta" => {
+                for (uhdr, up) in iter_child_boxes(p) {
+                    match &uhdr.kind {
+                        b"\xA9xyz" if xyz_gps.is_none() => xyz_gps = parse_xyz(up),
+                        b"loci" if loci_gps.is_none() => loci_gps = parse_loci(up),
+                        _ => {}
+                    }
+                }
+            }
+            b"meta" => {
+                let m = parse_qt_mdta(p);
+                if mdta.gps.is_none() { mdta.gps = m.gps; }
+                if mdta.make.is_none() { mdta.make = m.make; }
+                if mdta.model.is_none() { mdta.model = m.model; }
+                if mdta.created.is_none() { mdta.created = m.created; }
+            }
             _ => {}
         }
     }
+    // GPS 优先级：©xyz > mdta > loci。
+    info.gps = xyz_gps.or(mdta.gps).or(loci_gps);
+    // created：mdta creationdate 优先于 mvhd（mdta 带真实时区）。
+    info.created = mdta.created.or(info.created);
+    // make/model：mdta 唯一视频来源。
+    info.camera_make = mdta.make;
+    info.camera_model = mdta.model;
     info
 }
 
@@ -654,6 +692,15 @@ impl BmffParser {
             if let Some(dt) = info.created {
                 events.push(Event::Field(Field::Created(dt)));
             }
+            if let Some(g) = info.gps {
+                events.push(Event::Field(Field::Gps(g)));
+            }
+            if let Some(make) = info.camera_make {
+                events.push(Event::Field(Field::CameraMake(make)));
+            }
+            if let Some(model) = info.camera_model {
+                events.push(Event::Field(Field::CameraModel(model)));
+            }
             for warn in info.warnings {
                 events.push(Event::Warning(warn));
             }
@@ -866,6 +913,8 @@ struct QtMdta {
 
 /// 解析 QuickTime `moov/meta`（**非 FullBox** 容器）：hdlr(校验 mdta) + keys + ilst。
 /// 任一缺失/畸形 → 对应字段 None，绝不 panic。
+/// 注意：个别写入方（如 FCP7）在 moov/meta 前置 4 字节规范外 version/flags；
+/// 本实现不兼容该情形，遇此则 mdta 字段静默为空（无警告）。
 fn parse_qt_mdta(meta_payload: &[u8]) -> QtMdta {
     let mut out = QtMdta { gps: None, make: None, model: None, created: None };
     let mut keys: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
@@ -1764,5 +1813,46 @@ mod tests {
         let meta = box_bytes(b"hdlr", &hdlr);
         let out = parse_qt_mdta(&meta);
         assert!(out.gps.is_none() && out.make.is_none() && out.created.is_none());
+    }
+
+    #[test]
+    fn parse_moov_xyz_beats_loci_for_gps() {
+        let xyz_text = b"+10.0000+020.0000/";
+        let mut xyz_payload = alloc::vec::Vec::new();
+        xyz_payload.extend_from_slice(&(xyz_text.len() as u16).to_be_bytes());
+        xyz_payload.extend_from_slice(&0u16.to_be_bytes());
+        xyz_payload.extend_from_slice(xyz_text);
+
+        let mut loci = alloc::vec::Vec::new();
+        loci.extend_from_slice(&[0u8, 0, 0, 0, 0, 0]); // ver/flags+lang
+        loci.push(0); // name
+        loci.push(0); // role
+        loci.extend_from_slice(&((50.0f64 * 65536.0) as i32).to_be_bytes()); // lon
+        loci.extend_from_slice(&((60.0f64 * 65536.0) as i32).to_be_bytes()); // lat
+        loci.extend_from_slice(&((0.0f64 * 65536.0) as i32).to_be_bytes()); // alt
+
+        let mut udta = alloc::vec::Vec::new();
+        udta.extend_from_slice(&box_bytes(b"\xA9xyz", &xyz_payload));
+        udta.extend_from_slice(&box_bytes(b"loci", &loci));
+
+        let mut moov_p = alloc::vec::Vec::new();
+        moov_p.extend_from_slice(&box_bytes(b"udta", &udta));
+        let info = parse_moov(&moov_p, 0);
+        let g = info.gps.expect("gps");
+        assert_eq!(g.lat_e7, 100_000_000); // ©xyz 的 10°，非 loci 的 60°
+    }
+
+    #[test]
+    fn parse_moov_mdta_creationdate_beats_mvhd() {
+        let meta = qt_meta_with_keys(&[
+            ("com.apple.quicktime.creationdate", b"2017-07-22T16:06:06Z"),
+            ("com.apple.quicktime.make", b"Apple"),
+        ]);
+        let mut moov_p = alloc::vec::Vec::new();
+        moov_p.extend_from_slice(&box_bytes(b"mvhd", &mvhd_v0(2_082_844_800, 600, 600)));
+        moov_p.extend_from_slice(&box_bytes(b"meta", &meta));
+        let info = parse_moov(&moov_p, 0);
+        assert_eq!(info.created.map(|d| d.year), Some(2017));
+        assert_eq!(info.camera_make.as_deref(), Some("Apple"));
     }
 }
