@@ -3,9 +3,9 @@
 
 use alloc::vec::Vec;
 
-use crate::containers::ebml::{iter_child_elements, read_float, read_int, read_uint};
+use crate::containers::ebml::{iter_child_elements, needed_header_bytes, read_element_header, read_float, read_int, read_uint, ElemHeader};
 use crate::demand::{Demand, Event, MetaParser, PullResult};
-use crate::model::DateTimeParts;
+use crate::model::{DateTimeParts, Field, WarnKind, Warning};
 
 /// Matroska DateUTC 纪元（2001-01-01）相对 Unix 纪元（1970-01-01）的天数差。
 const MATROSKA_EPOCH_DAYS_AFTER_UNIX: i64 = 11_323;
@@ -117,9 +117,26 @@ fn track_entry_dims(payload: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    TopLevel,
+    InSegment,
+}
+
+#[derive(Debug)]
 pub struct EbmlParser {
     done: bool,
+    phase: Phase,
+    got_info: bool,
+    got_tracks: bool,
+    /// 当前待读元素的绝对偏移，仅用于警告偏移保真。
+    pos: u64,
+}
+
+impl Default for EbmlParser {
+    fn default() -> Self {
+        Self { done: false, phase: Phase::TopLevel, got_info: false, got_tracks: false, pos: 0 }
+    }
 }
 
 impl EbmlParser {
@@ -128,16 +145,205 @@ impl EbmlParser {
     }
 }
 
+fn done_result<'a>() -> PullResult<'a> {
+    PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() }
+}
+
+fn need_result<'a>(n: usize) -> PullResult<'a> {
+    PullResult { demand: Demand::NeedBytes(n), consumed: 0, events: Vec::new() }
+}
+
 impl MetaParser for EbmlParser {
-    fn pull<'a>(&mut self, _input: &'a [u8]) -> PullResult<'a> {
-        self.done = true;
-        PullResult { demand: Demand::Done, consumed: 0, events: Vec::<Event<'a>>::new() }
+    fn pull<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
+        if self.done {
+            return done_result();
+        }
+        if input.is_empty() {
+            self.done = true; // 空窗口（驱动保证仅 EOF 出现）= 干净结束
+            return done_result();
+        }
+        let hdr = match read_element_header(input) {
+            Some(h) => h,
+            None => {
+                let need = needed_header_bytes(input);
+                if input.len() >= need {
+                    // 字节已够却仍读不出头 → 畸形，干净结束（防卡死）。
+                    self.done = true;
+                    return done_result();
+                }
+                return need_result(need);
+            }
+        };
+        let header_len = hdr.header_len as usize;
+        match self.phase {
+            Phase::TopLevel => self.step_top(&hdr, header_len),
+            Phase::InSegment => self.step_segment(input, &hdr, header_len),
+        }
+    }
+}
+
+impl EbmlParser {
+    /// 顶层：下钻 Segment（仅消费其头部，不缓冲）；其它元素跳过整体。
+    fn step_top<'a>(&mut self, hdr: &ElemHeader, header_len: usize) -> PullResult<'a> {
+        if hdr.id == SEGMENT {
+            self.phase = Phase::InSegment;
+            self.pos = self.pos.saturating_add(header_len as u64);
+            // 仅消费 Segment 头，索要首个子元素头（最小 2 字节）。
+            return PullResult { demand: Demand::NeedBytes(2), consumed: header_len, events: Vec::new() };
+        }
+        match hdr.size {
+            Some(sz) => {
+                self.pos = self.pos.saturating_add(header_len as u64).saturating_add(sz);
+                PullResult { demand: Demand::Skip(sz), consumed: header_len, events: Vec::new() }
+            }
+            None => {
+                // 未知大小且非 Segment → 不可能再有 Segment，干净结束。
+                self.done = true;
+                done_result()
+            }
+        }
+    }
+
+    /// Segment 内：缓冲并解析 Info/Tracks；跳过定长不关心元素；遇未知大小媒体即停止。
+    fn step_segment<'a>(&mut self, input: &'a [u8], hdr: &ElemHeader, header_len: usize) -> PullResult<'a> {
+        let sz = match hdr.size {
+            Some(s) => s,
+            None => {
+                // 未知大小媒体（如直播 Cluster）。
+                self.done = true;
+                if self.got_info && self.got_tracks {
+                    return done_result();
+                }
+                let events = alloc::vec![Event::Warning(Warning {
+                    offset: self.pos,
+                    kind: WarnKind::UnreachableSection,
+                })];
+                return PullResult { demand: Demand::Done, consumed: 0, events };
+            }
+        };
+        let wanted = hdr.id == INFO || hdr.id == TRACKS;
+        if !wanted {
+            self.pos = self.pos.saturating_add(header_len as u64).saturating_add(sz);
+            return PullResult { demand: Demand::Skip(sz), consumed: header_len, events: Vec::new() };
+        }
+        // 关心的元素：须整元素入窗。
+        let total = match usize::try_from(sz).ok().and_then(|s| header_len.checked_add(s)) {
+            Some(t) => t,
+            None => {
+                self.done = true;
+                return done_result();
+            }
+        };
+        if input.len() < total {
+            return need_result(total); // 不足 → 索要整元素（slice 下即截断；stream 下补字节）
+        }
+        let payload = &input[header_len..total];
+        let mut events: Vec<Event<'a>> = Vec::new();
+        if hdr.id == INFO {
+            let info = parse_info(payload);
+            if let Some(ms) = info.duration_ms {
+                events.push(Event::Field(Field::Duration(ms)));
+            }
+            if let Some(dt) = info.created {
+                events.push(Event::Field(Field::Created(dt)));
+            }
+            if info.invalid {
+                events.push(Event::Warning(Warning { offset: self.pos, kind: WarnKind::UnrecognizedValue }));
+            }
+            self.got_info = true;
+        } else {
+            if let Some((w, h)) = parse_tracks(payload) {
+                events.push(Event::Field(Field::Width(w)));
+                events.push(Event::Field(Field::Height(h)));
+            }
+            self.got_tracks = true;
+        }
+        self.pos = self.pos.saturating_add(total as u64);
+        if self.got_info && self.got_tracks {
+            self.done = true;
+            return PullResult { demand: Demand::Done, consumed: total, events };
+        }
+        PullResult { demand: Demand::NeedBytes(2), consumed: total, events }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn doctype_header(doctype: &[u8]) -> Vec<u8> {
+        let dt = elem(&[0x42, 0x82], doctype);
+        elem(&[0x1A, 0x45, 0xDF, 0xA3], &dt)
+    }
+
+    fn segment(children: &[u8]) -> Vec<u8> {
+        elem(&[0x18, 0x53, 0x80, 0x67], children)
+    }
+
+    /// 构造完整 MKV/WebM：EBML头 + Segment{ Info, Tracks, Cluster }。
+    fn full_ebml(doctype: &[u8], w: u32, h: u32, dur: f64, date_ns: i64) -> Vec<u8> {
+        let info = elem(&[0x15, 0x49, 0xA9, 0x66], &info_payload(Some(1_000_000), Some(dur), Some(date_ns)));
+        let tracks = elem(&[0x16, 0x54, 0xAE, 0x6B], &video_track(w, h));
+        let cluster = elem(&[0x1F, 0x43, 0xB6, 0x75], &[0u8; 8]);
+        let mut seg_children = Vec::new();
+        seg_children.extend_from_slice(&info);
+        seg_children.extend_from_slice(&tracks);
+        seg_children.extend_from_slice(&cluster);
+        let mut f = doctype_header(doctype);
+        f.extend_from_slice(&segment(&seg_children));
+        f
+    }
+
+    #[test]
+    fn end_to_end_webm_slice() {
+        let buf = full_ebml(b"webm", 1280, 720, 5000.0, 0);
+        let col = crate::driver::drive_slice(&buf, &mut EbmlParser::new(), crate::limits::Limits::default());
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Webm);
+        assert!(meta.warnings.is_empty(), "warnings: {:?}", meta.warnings);
+        assert_eq!(meta.unified.width, Some(1280));
+        assert_eq!(meta.unified.height, Some(720));
+        assert_eq!(meta.unified.duration_ms, Some(5000));
+        assert_eq!(meta.unified.created.map(|d| d.year), Some(2001));
+        assert_eq!(meta.unified.created.and_then(|d| d.tz_offset_min), Some(0));
+    }
+
+    #[test]
+    fn walk_skips_ebml_header_and_descends_segment() {
+        let buf = full_ebml(b"matroska", 640, 480, 1000.0, 0);
+        let mut p = EbmlParser::new();
+        let res = p.pull(&buf);
+        match res.demand {
+            Demand::Skip(_) => {}
+            other => panic!("expected Skip over EBML header, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_size_media_before_info_warns_and_stops() {
+        // Segment 内首个子元素是未知大小 Cluster（在集齐 Info+Tracks 前）→ 警告 + Done。
+        let mut cluster = Vec::new();
+        cluster.extend_from_slice(&[0x1F, 0x43, 0xB6, 0x75]); // Cluster id
+        cluster.extend_from_slice(&[0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]); // 未知大小
+        cluster.extend_from_slice(&[0u8; 4]);
+        let mut f = doctype_header(b"webm");
+        f.extend_from_slice(&segment(&cluster));
+        let col = crate::driver::drive_slice(&f, &mut EbmlParser::new(), crate::limits::Limits::default());
+        assert!(col.warnings.iter().any(|w| w.kind == crate::model::WarnKind::UnreachableSection));
+    }
+
+    #[test]
+    fn truncated_info_warns_truncated() {
+        // Info 声明 size 远大于实际 → driver 到 EOF 记 Truncated，不 panic。
+        let mut info = Vec::new();
+        info.extend_from_slice(&[0x15, 0x49, 0xA9, 0x66]); // Info id
+        info.extend_from_slice(&[0x01]);
+        info.extend_from_slice(&300u64.to_be_bytes()[1..]); // 声明 300
+        info.extend_from_slice(&[0u8; 8]); // 实际仅 8
+        let mut f = doctype_header(b"webm");
+        f.extend_from_slice(&segment(&info));
+        let col = crate::driver::drive_slice(&f, &mut EbmlParser::new(), crate::limits::Limits::default());
+        assert!(col.warnings.iter().any(|w| w.kind == crate::model::WarnKind::Truncated));
+    }
 
     #[test]
     fn matroska_epoch_anchor_and_offsets() {
