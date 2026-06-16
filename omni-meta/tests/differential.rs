@@ -685,3 +685,83 @@ fn make_tiff_datetime_original() -> Vec<u8> {
 fn differential_jpeg_exif_created() {
     assert_all_equal(&wrap_jpeg_tiff(&make_tiff_datetime_original()));
 }
+
+// ---- EBML（Matroska/WebM）----
+
+fn ebml_elem(id: &[u8], payload: &[u8]) -> Vec<u8> {
+    // 8 字节 vint size 编码
+    let mut e = Vec::new();
+    e.extend_from_slice(id);
+    e.push(0x01);
+    e.extend_from_slice(&(payload.len() as u64).to_be_bytes()[1..]);
+    e.extend_from_slice(payload);
+    e
+}
+
+fn ebml_video_track(w: u32, h: u32) -> Vec<u8> {
+    let mut vid = Vec::new();
+    vid.extend_from_slice(&ebml_elem(&[0xB0], &w.to_be_bytes())); // PixelWidth
+    vid.extend_from_slice(&ebml_elem(&[0xBA], &h.to_be_bytes())); // PixelHeight
+    let video = ebml_elem(&[0xE0], &vid);
+    ebml_elem(&[0xAE], &video) // TrackEntry { Video }
+}
+
+fn ebml_info() -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&ebml_elem(&[0x2A, 0xD7, 0xB1], &1_000_000u64.to_be_bytes())); // TimestampScale
+    p.extend_from_slice(&ebml_elem(&[0x44, 0x89], &5000.0f64.to_be_bytes()));          // Duration
+    p.extend_from_slice(&ebml_elem(&[0x44, 0x61], &0i64.to_be_bytes()));               // DateUTC=0 → 2001
+    ebml_elem(&[0x15, 0x49, 0xA9, 0x66], &p)
+}
+
+fn ebml_header(doctype: &[u8]) -> Vec<u8> {
+    let dt = ebml_elem(&[0x42, 0x82], doctype);
+    ebml_elem(&[0x1A, 0x45, 0xDF, 0xA3], &dt)
+}
+
+/// EBML头 + Segment{ Info, Void(大), Tracks, Cluster }。
+/// 大 Void 在 Tracks 之前被 Skip（>8192 → 行使 read_seek 原生 seek 路径）。
+fn fixture_ebml(doctype: &[u8]) -> Vec<u8> {
+    let void = ebml_elem(&[0xEC], &vec![0u8; 10_000]); // 大 Void，跳过
+    let tracks = ebml_elem(&[0x16, 0x54, 0xAE, 0x6B], &ebml_video_track(1280, 720));
+    let cluster = ebml_elem(&[0x1F, 0x43, 0xB6, 0x75], &[0u8; 16]);
+    let mut seg_children = Vec::new();
+    seg_children.extend_from_slice(&ebml_info());
+    seg_children.extend_from_slice(&void);
+    seg_children.extend_from_slice(&tracks);
+    seg_children.extend_from_slice(&cluster);
+    let segment = ebml_elem(&[0x18, 0x53, 0x80, 0x67], &seg_children);
+    let mut f = ebml_header(doctype);
+    f.extend_from_slice(&segment);
+    f
+}
+
+/// Segment 用「未知大小」编码（直播常见）；下钻不依赖 Segment size。
+fn fixture_ebml_unknown_size_segment() -> Vec<u8> {
+    let tracks = ebml_elem(&[0x16, 0x54, 0xAE, 0x6B], &ebml_video_track(640, 480));
+    let mut seg_children = Vec::new();
+    seg_children.extend_from_slice(&ebml_info());
+    seg_children.extend_from_slice(&tracks);
+    let mut segment = Vec::new();
+    segment.extend_from_slice(&[0x18, 0x53, 0x80, 0x67]); // Segment id
+    segment.extend_from_slice(&[0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]); // 未知大小
+    segment.extend_from_slice(&seg_children);
+    let mut f = ebml_header(b"webm");
+    f.extend_from_slice(&segment);
+    f
+}
+
+#[test]
+fn differential_webm() {
+    assert_all_equal(&fixture_ebml(b"webm"));
+}
+
+#[test]
+fn differential_mkv() {
+    assert_all_equal(&fixture_ebml(b"matroska"));
+}
+
+#[test]
+fn differential_ebml_unknown_size_segment() {
+    assert_all_equal(&fixture_ebml_unknown_size_segment());
+}
