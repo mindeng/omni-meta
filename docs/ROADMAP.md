@@ -1,6 +1,6 @@
 # omni-meta Roadmap
 
-**活文档** · 最近更新 2026-06-16（A1+A2+A3+C 完成）· 维护者随进度勾选
+**活文档** · 最近更新 2026-06-16（A1+A2+A3+C 完成；GPS 字段投影 + 视频 mdta 来源完成）· 维护者随进度勾选
 基准设计：[`docs/superpowers/specs/2026-06-14-omni-meta-design.md`](superpowers/specs/2026-06-14-omni-meta-design.md)
 
 > 本文档替代原设计 §11 的线性 phase 表——实际推进中适配器被提前完成、各纵切片
@@ -34,17 +34,19 @@
 
 ### 当前 Unified 字段
 
-`width` · `height` · `orientation` · `camera_make` · `camera_model` · `duration_ms` · `created`（均 `Option`）
+`width` · `height` · `orientation` · `camera_make` · `camera_model` · `duration_ms` · `created` · `gps`（均 `Option`）
 > 受控增长原则：每个新字段需 **≥2 种格式来源**才纳入。
 > A2 起 `width`/`height` 增 HEIF/AVIF `ispe` 来源（第 5 个格式来源）。
 > A3 起新增 `created`（BMFF moov 1904 UTC + EXIF DateTimeOriginal/DateTime，≥2 来源满足；`DateTimeParts`
 > 带可选时区：moov=`Some(0)` UTC，EXIF 无 OffsetTime 时 `None`）与 `duration_ms`（BMFF moov，毫秒；
 > 第二来源待 EBML 里程碑 C 补齐）。
 > C 起 `duration_ms` 增 EBML（MKV/WebM `Info > Duration × TimestampScale`）第二来源；`created` 增 EBML `DateUTC`（2001 UTC）第三来源。`width`/`height` 增 EBML `Video PixelWidth/Height`（第 6 来源）。
+> GPS 里程碑起新增 `gps`（`Gps { lat_e7, lon_e7, alt_mm }`，E7/mm 整数表示），来源：EXIF GPS IFD（d/m/s 有理数）+ XMP `exif:GPS*` 回退 + 视频 udta `©xyz`/`loci` + QuickTime moov/meta mdta `location.ISO6709`，≥3 来源满足。
+> `camera_make`/`camera_model` 增 QuickTime mdta（首次覆盖视频来源）。`created` 增 QuickTime mdta `creationdate`（ISO 8601 带时区，优先于 mvhd 1904 UTC）。
 
 ### 尚未开始 ⬜
 
-IPTC codec · ICC 摘要 · TIFF 顶层格式 · async/tokio 适配器 · Stripper（剥离）· GPS 等 Unified 字段扩展 · `cargo-fuzz`（横切，各容器/codec）
+IPTC codec · ICC 摘要 · TIFF 顶层格式 · async/tokio 适配器 · Stripper（剥离）· `video_codec`/`audio_codec` 等 Unified 字段扩展 · `cargo-fuzz`（横切，各容器/codec）
 
 ---
 
@@ -137,7 +139,7 @@ IPTC codec · ICC 摘要 · TIFF 顶层格式 · async/tokio 适配器 · Stripp
 
 ## 4. 横切待办（贯穿各里程碑）
 
-- [ ] **Unified 受控增长**：`created`（BMFF+EXIF）/ `duration_ms`（BMFF+EBML，**C 起达 ≥2 来源**）/ `gps`（EXIF GPS IFD + XMP，raw 已就绪，待 normalize 投影）/ `video_codec` / `audio_codec` 等随来源达到 ≥2 时纳入
+- [ ] **Unified 受控增长**：`created`（BMFF+EXIF）/ `duration_ms`（BMFF+EBML，**C 起达 ≥2 来源**）/ `gps`（EXIF GPS IFD + XMP + 视频 ©xyz/loci/QuickTime mdta，**已投影，≥3 来源**）✅ / `video_codec` / `audio_codec` 等随来源达到 ≥2 时纳入
 - [ ] **`Value` 枚举**：按需补 `U64`/`I64` 等（当前为 v1 子集）
 - [ ] **fuzz**：每个新容器/codec 接 `cargo-fuzz`，断言永不 panic / 不超 `Limits` / 不死循环
 - [ ] **no_std CI**：每个里程碑验证 `--no-default-features`
