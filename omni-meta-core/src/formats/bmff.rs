@@ -1855,4 +1855,35 @@ mod tests {
         assert_eq!(info.created.map(|d| d.year), Some(2017));
         assert_eq!(info.camera_make.as_deref(), Some("Apple"));
     }
+
+    #[test]
+    fn end_to_end_mov_mdta_gps_make() {
+        // 文件：ftyp + moov{ mvhd, udta{©xyz}, meta{mdta make/model} }
+        let xyz_text = b"+35.0000+139.0000/";
+        let mut xyz_payload = alloc::vec::Vec::new();
+        xyz_payload.extend_from_slice(&(xyz_text.len() as u16).to_be_bytes());
+        xyz_payload.extend_from_slice(&0u16.to_be_bytes());
+        xyz_payload.extend_from_slice(xyz_text);
+        let mut udta = alloc::vec::Vec::new();
+        udta.extend_from_slice(&box_bytes(b"\xA9xyz", &xyz_payload));
+
+        let meta = qt_meta_with_keys(&[
+            ("com.apple.quicktime.make", b"Apple"),
+            ("com.apple.quicktime.model", b"iPhone 15"),
+        ]);
+
+        let mut moov_p = alloc::vec::Vec::new();
+        moov_p.extend_from_slice(&box_bytes(b"mvhd", &mvhd_v0(2_082_844_800, 600, 600)));
+        moov_p.extend_from_slice(&box_bytes(b"udta", &udta));
+        moov_p.extend_from_slice(&box_bytes(b"meta", &meta));
+
+        let mut f = ftyp_mp4();
+        f.extend_from_slice(&box_bytes(b"moov", &moov_p));
+
+        let col = crate::driver::drive_slice(&f, &mut BmffParser::new(), crate::limits::Limits::default());
+        let meta_out = crate::driver::finalize(col, crate::model::FileFormat::Mov);
+        assert_eq!(meta_out.unified.gps.map(|g| g.lat_e7), Some(350_000_000));
+        assert_eq!(meta_out.unified.camera_make.as_deref(), Some("Apple"));
+        assert_eq!(meta_out.unified.camera_model.as_deref(), Some("iPhone 15"));
+    }
 }
