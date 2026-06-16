@@ -164,6 +164,8 @@ pub struct Unified {
     pub duration_ms: Option<u64>,
     pub created: Option<DateTimeParts>,
     pub gps: Option<Gps>,
+    pub software: Option<String>,
+    pub creator: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -340,5 +342,12 @@ mod tests {
     fn rawtags_default_has_empty_container() {
         let r = RawTags::default();
         assert!(r.container.is_empty());
+    }
+
+    #[test]
+    fn unified_has_software_and_creator_default_none() {
+        let u = Unified::default();
+        assert!(u.software.is_none());
+        assert!(u.creator.is_none());
     }
 }
