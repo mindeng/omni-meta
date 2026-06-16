@@ -19,6 +19,9 @@ pub struct Collector {
     height: Option<u32>,
     duration_ms: Option<u64>,
     created: Option<crate::model::DateTimeParts>,
+    gps: Option<crate::model::Gps>,
+    camera_make: Option<alloc::string::String>,
+    camera_model: Option<alloc::string::String>,
     limits: Limits,
 }
 
@@ -52,10 +55,21 @@ impl Collector {
                     self.created = Some(dt);
                 }
             }
-            // 新变体（Gps/CameraMake/CameraModel）由后续任务接入 Collector；此处暂丢弃。
-            Event::Field(Field::Gps(_))
-            | Event::Field(Field::CameraMake(_))
-            | Event::Field(Field::CameraModel(_)) => {}
+            Event::Field(Field::Gps(g)) => {
+                if self.gps.is_none() {
+                    self.gps = Some(g);
+                }
+            }
+            Event::Field(Field::CameraMake(s)) => {
+                if self.camera_make.is_none() {
+                    self.camera_make = Some(s);
+                }
+            }
+            Event::Field(Field::CameraModel(s)) => {
+                if self.camera_model.is_none() {
+                    self.camera_model = Some(s);
+                }
+            }
         }
     }
 }
@@ -76,6 +90,7 @@ pub enum Outcome {
 pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
     let (width, height) = (col.width, col.height);
     let (duration_ms, created) = (col.duration_ms, col.created);
+    let (gps, camera_make, camera_model) = (col.gps, col.camera_make, col.camera_model);
     let raw = RawTags { exif: col.exif, xmp: col.xmp };
     let mut warnings = col.warnings;
     let mut unified = normalize(&raw, &mut warnings);
@@ -90,6 +105,15 @@ pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
     }
     if let Some(c) = created {
         unified.created = Some(c); // 容器（moov）优先于 EXIF 派生
+    }
+    if let Some(g) = gps {
+        unified.gps = Some(g);
+    }
+    if let Some(m) = camera_make {
+        unified.camera_make = Some(m);
+    }
+    if let Some(m) = camera_model {
+        unified.camera_model = Some(m);
     }
     Metadata { unified, raw, warnings, format }
 }
@@ -122,6 +146,9 @@ impl StreamDriver {
                 height: None,
                 duration_ms: None,
                 created: None,
+                gps: None,
+                camera_make: None,
+                camera_model: None,
                 limits,
             },
             skip_remaining: 0,
@@ -326,6 +353,9 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
         height: None,
         duration_ms: None,
         created: None,
+        gps: None,
+        camera_make: None,
+        camera_model: None,
         limits,
     };
     let mut pos: usize = 0;
@@ -885,6 +915,32 @@ mod tests {
         assert!(meta.raw.exif.iter().any(|t| t.tag == 0x9003), "EXIF DateTimeOriginal 应被解码");
         // 容器值（2018）覆盖 EXIF 派生值（2003）
         assert_eq!(meta.unified.created.map(|d| d.year), Some(2018));
+    }
+
+    #[test]
+    fn collector_applies_gps_make_model_fields() {
+        use crate::model::Gps;
+        struct Emitter;
+        impl MetaParser for Emitter {
+            fn pull<'a>(&mut self, _input: &'a [u8]) -> crate::demand::PullResult<'a> {
+                crate::demand::PullResult {
+                    demand: Demand::Done,
+                    consumed: 0,
+                    events: alloc::vec![
+                        Event::Field(Field::Gps(Gps { lat_e7: 1, lon_e7: 2, alt_mm: Some(3) })),
+                        Event::Field(Field::CameraMake(alloc::string::String::from("Apple"))),
+                        Event::Field(Field::CameraModel(alloc::string::String::from("iPhone 15"))),
+                    ],
+                }
+            }
+        }
+        let buf = [0u8; 4];
+        let mut p = Emitter;
+        let col = drive_slice(&buf, &mut p, Limits::default());
+        let meta = finalize(col, FileFormat::Mov);
+        assert_eq!(meta.unified.gps, Some(Gps { lat_e7: 1, lon_e7: 2, alt_mm: Some(3) }));
+        assert_eq!(meta.unified.camera_make.as_deref(), Some("Apple"));
+        assert_eq!(meta.unified.camera_model.as_deref(), Some("iPhone 15"));
     }
 
     fn make_tiff() -> Vec<u8> {
