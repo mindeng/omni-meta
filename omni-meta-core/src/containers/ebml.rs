@@ -34,12 +34,8 @@ pub fn read_elem_size(input: &[u8]) -> Option<(Option<u64>, usize)> {
     for &b in &bytes[1..] {
         val = (val << 8) | u64::from(b);
     }
-    let data_bits = 7 * len;
-    let all_ones = if data_bits >= 64 {
-        val == u64::MAX
-    } else {
-        val == (1u64 << data_bits) - 1
-    };
+    // 数据位 = 7*len ≤ 56（len ≤ 8），故 1<<data_bits 不会溢出。
+    let all_ones = val == (1u64 << (7 * len)) - 1;
     Some((if all_ones { None } else { Some(val) }, len))
 }
 

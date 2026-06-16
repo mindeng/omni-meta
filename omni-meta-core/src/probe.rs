@@ -60,20 +60,20 @@ fn ebml_format(buf: &[u8]) -> FileFormat {
     FileFormat::Unknown
 }
 
-/// 在前 PROBE_MAX 字节内查找 DocType 元素（ID 0x42 0x82）并读取其字符串值。
-/// 元素存在但字符串尚未完整缓冲 → None（继续等待）。
+/// 在前 PROBE_MAX 字节内、按 EBML 结构定位 DocType（id 0x4282）并读取其字符串值。
+/// 头部/字符串尚未完整缓冲 → None（继续等待）。结构化解析，避免裸字节误配。
 fn find_doctype(buf: &[u8]) -> Option<&[u8]> {
     let scan = &buf[..buf.len().min(PROBE_MAX)];
-    let mut i = 0usize;
-    while i + 1 < scan.len() {
-        if scan[i] == 0x42 && scan[i + 1] == 0x82 {
-            let rest = &scan[i + 2..];
-            let (size, szlen) = crate::containers::ebml::read_elem_size(rest)?;
-            let size = usize::try_from(size?).ok()?;
-            let end = szlen.checked_add(size)?;
-            return rest.get(szlen..end);
+    let hdr = crate::containers::ebml::read_element_header(scan)?;
+    if hdr.id != 0x1A45_DFA3 {
+        return None; // 非 EBML 头
+    }
+    let hdr_len = usize::try_from(hdr.header_len).ok()?;
+    let payload = scan.get(hdr_len..)?;
+    for (child, p) in crate::containers::ebml::iter_child_elements(payload) {
+        if child.id == 0x4282 {
+            return Some(p);
         }
-        i += 1;
     }
     None
 }

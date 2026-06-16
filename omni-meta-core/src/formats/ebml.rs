@@ -66,7 +66,7 @@ fn parse_info(payload: &[u8]) -> InfoData {
             out.invalid = true;
         } else {
             let ms = d * scale as f64 / 1_000_000.0;
-            if ms < 0.0 || ms > u64::MAX as f64 {
+            if ms < 0.0 || ms >= u64::MAX as f64 {
                 out.invalid = true;
             } else {
                 out.duration_ms = Some(ms as u64);
@@ -395,11 +395,30 @@ mod tests {
     }
 
     #[test]
-    fn parse_info_explicit_scale_and_f32_path() {
+    fn parse_info_explicit_scale() {
         // scale 1_000_000；duration 1500.0 → 1500 ms
         let info = parse_info(&info_payload(Some(1_000_000), Some(1500.0), Some(0)));
         assert_eq!(info.duration_ms, Some(1500));
         assert_eq!(info.created.map(|d| d.year), Some(2001));
+    }
+
+    #[test]
+    fn parse_info_duration_overflow_is_invalid() {
+        // 极大 Duration × scale → ms 超 u64，应判 invalid、无 duration。
+        let info = parse_info(&info_payload(Some(1_000_000), Some(1e30), None));
+        assert_eq!(info.duration_ms, None);
+        assert!(info.invalid);
+    }
+
+    #[test]
+    fn parse_info_f32_duration_path() {
+        // 4 字节 f32 Duration = 2500.0；默认 scale 缺省时用显式 scale。
+        let mut p = Vec::new();
+        p.extend_from_slice(&elem(&[0x2A, 0xD7, 0xB1], &1_000_000u64.to_be_bytes())); // TimestampScale
+        p.extend_from_slice(&elem(&[0x44, 0x89], &2500.0f32.to_be_bytes()));          // 4 字节 Duration
+        let info = parse_info(&p);
+        assert_eq!(info.duration_ms, Some(2500));
+        assert!(!info.invalid);
     }
 
     #[test]
