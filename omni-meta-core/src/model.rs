@@ -86,7 +86,7 @@ pub struct Gps {
 }
 
 /// 容器原生字段（解析器直接从头部读出，不经 codec）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Field {
     Width(u32),
     Height(u32),
@@ -94,6 +94,12 @@ pub enum Field {
     Duration(u64),
     /// 创建时间。
     Created(DateTimeParts),
+    /// 地理坐标（容器原生，如 mp4/mov udta/mdta）。
+    Gps(Gps),
+    /// 相机厂商（容器原生，如 QuickTime mdta）。
+    CameraMake(String),
+    /// 相机型号（容器原生，如 QuickTime mdta）。
+    CameraModel(String),
 }
 
 /// 一条 XMP 属性。prefix 为惯用前缀（如 "tiff"），原样保留，不解析命名空间 URI。
@@ -280,5 +286,19 @@ mod tests {
     fn unified_has_gps_defaulting_none() {
         let u = Unified::default();
         assert_eq!(u.gps, None);
+    }
+
+    #[test]
+    fn field_has_gps_make_model_variants() {
+        let g = Field::Gps(Gps { lat_e7: 1, lon_e7: 2, alt_mm: None });
+        assert_eq!(g, Field::Gps(Gps { lat_e7: 1, lon_e7: 2, alt_mm: None }));
+        assert_eq!(
+            Field::CameraMake(String::from("Apple")),
+            Field::CameraMake(String::from("Apple"))
+        );
+        assert_ne!(
+            Field::CameraModel(String::from("iPhone 15")),
+            Field::CameraModel(String::from("iPhone 14"))
+        );
     }
 }

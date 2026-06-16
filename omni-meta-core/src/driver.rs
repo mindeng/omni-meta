@@ -52,6 +52,10 @@ impl Collector {
                     self.created = Some(dt);
                 }
             }
+            // 新变体（Gps/CameraMake/CameraModel）由后续任务接入 Collector；此处暂丢弃。
+            Event::Field(Field::Gps(_))
+            | Event::Field(Field::CameraMake(_))
+            | Event::Field(Field::CameraModel(_)) => {}
         }
     }
 }
