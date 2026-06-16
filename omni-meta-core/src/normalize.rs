@@ -68,6 +68,96 @@ fn dms_value_to_deg(v: &Value) -> Option<f64> {
     Some(deg)
 }
 
+/// 解析无符号十进制 "D" 或 "D.DDDD" → 值 × 10^scale_pow10（截断多余小数位）。i64 防溢出。
+/// 允许可选前导 +/-；格式不符/溢出 → None。（no_std：不用 f64::FromStr。）
+fn parse_scaled_decimal(s: &str, scale_pow10: u32) -> Option<i64> {
+    let b = s.as_bytes();
+    if b.is_empty() {
+        return None;
+    }
+    let (neg, rest): (bool, &[u8]) = match b[0] {
+        b'+' => (false, &b[1..]),
+        b'-' => (true, &b[1..]),
+        _ => (false, b),
+    };
+    if rest.is_empty() {
+        return None;
+    }
+    let mut acc: i64 = 0;
+    let mut frac: u32 = 0;
+    let mut seen_dot = false;
+    let mut any = false;
+    for &c in rest {
+        if c == b'.' {
+            if seen_dot {
+                return None;
+            }
+            seen_dot = true;
+            continue;
+        }
+        if !c.is_ascii_digit() {
+            return None;
+        }
+        any = true;
+        if seen_dot {
+            if frac < scale_pow10 {
+                acc = acc.checked_mul(10)?.checked_add((c - b'0') as i64)?;
+                frac += 1;
+            }
+        } else {
+            acc = acc.checked_mul(10)?.checked_add((c - b'0') as i64)?;
+        }
+    }
+    if !any {
+        return None;
+    }
+    let pad = scale_pow10.checked_sub(frac)?;
+    for _ in 0..pad {
+        acc = acc.checked_mul(10)?;
+    }
+    Some(if neg { -acc } else { acc })
+}
+
+/// 解析 XMP exif:GPSLatitude/Longitude "DDD,MM.mmm[NSEW]" 或 "DDD,MM,SS[NSEW]" → E7。
+fn parse_xmp_coord(s: &str) -> Option<i32> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let last = s.as_bytes()[s.len() - 1];
+    let neg = matches!(last, b'S' | b'W' | b's' | b'w');
+    let core = if last.is_ascii_alphabetic() { &s[..s.len() - 1] } else { s };
+    let mut parts = core.split(',');
+    let deg: i64 = {
+        let d = parts.next()?;
+        parse_scaled_decimal(d, 0)?
+    };
+    let mut e7: i64 = deg.checked_mul(10_000_000)?;
+    if let Some(min_str) = parts.next() {
+        let min_e7 = parse_scaled_decimal(min_str, 7)?;
+        e7 = e7.checked_add(min_e7 / 60)?;
+    }
+    if let Some(sec_str) = parts.next() {
+        let sec_e7 = parse_scaled_decimal(sec_str, 7)?;
+        e7 = e7.checked_add(sec_e7 / 3600)?;
+    }
+    let e7 = if neg { -e7 } else { e7 };
+    i32::try_from(e7).ok()
+}
+
+/// XMP 回退坐标：lat+lon 都成功才 Some。altitude 暂不从 XMP 取（来源足够，YAGNI）。
+fn gps_from_xmp(raw: &RawTags) -> Option<Gps> {
+    let get = |name: &str| {
+        raw.xmp
+            .iter()
+            .find(|p| p.prefix == "exif" && p.name == name)
+            .map(|p| p.value.as_str())
+    };
+    let lat = parse_xmp_coord(get("GPSLatitude")?)?;
+    let lon = parse_xmp_coord(get("GPSLongitude")?)?;
+    Some(Gps { lat_e7: lat, lon_e7: lon, alt_mm: None })
+}
+
 /// 从 EXIF GPS IFD 投影坐标。lat+lon 都成功才返回 Some；altitude 可选。
 fn gps_from_exif(raw: &RawTags) -> Option<Gps> {
     let find = |tag: u16| raw.exif.iter().find(|t| t.ifd == IfdKind::Gps && t.tag == tag);
@@ -194,8 +284,13 @@ pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
     });
     if let Some(g) = gps_from_exif(raw) {
         u.gps = Some(g);
-    } else if has_gps_exif {
-        warnings.push(Warning { offset: 0, kind: WarnKind::UnrecognizedValue });
+    } else {
+        if has_gps_exif {
+            warnings.push(Warning { offset: 0, kind: WarnKind::UnrecognizedValue });
+        }
+        if let Some(g) = gps_from_xmp(raw) {
+            u.gps = Some(g);
+        }
     }
     u
 }
@@ -499,5 +594,46 @@ mod tests {
         let u = normalize(&raw, &mut w);
         assert_eq!(u.gps, None);
         assert_eq!(w.iter().filter(|x| x.kind == WarnKind::UnrecognizedValue).count(), 1);
+    }
+
+    fn xmp_p(prefix: &str, name: &str, value: &str) -> XmpProperty {
+        XmpProperty { prefix: String::from(prefix), name: String::from(name), value: String::from(value) }
+    }
+
+    #[test]
+    fn gps_from_xmp_decimal_minutes_form() {
+        // exif:GPSLatitude "39,57.0900N"、exif:GPSLongitude "116,23.4000E"
+        let raw = RawTags {
+            exif: Vec::new(),
+            xmp: Vec::from([
+                xmp_p("exif", "GPSLatitude", "39,57.0900N"),
+                xmp_p("exif", "GPSLongitude", "116,23.4000E"),
+            ]),
+        };
+        let mut w = Vec::new();
+        let g = normalize(&raw, &mut w).gps.expect("gps");
+        assert!((g.lat_e7 - 399_515_000).abs() <= 2, "lat_e7={}", g.lat_e7);
+        assert!((g.lon_e7 - 1_163_900_000).abs() <= 2, "lon_e7={}", g.lon_e7);
+    }
+
+    #[test]
+    fn gps_exif_wins_over_xmp() {
+        let raw = RawTags {
+            exif: Vec::from([
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0001, value: Value::Text(String::from("N")) },
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0002,
+                    value: Value::List(Vec::from([rat(10, 1), rat(0, 1), rat(0, 1)])) },
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0003, value: Value::Text(String::from("E")) },
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0004,
+                    value: Value::List(Vec::from([rat(20, 1), rat(0, 1), rat(0, 1)])) },
+            ]),
+            xmp: Vec::from([
+                xmp_p("exif", "GPSLatitude", "39,57.0900N"),
+                xmp_p("exif", "GPSLongitude", "116,23.4000E"),
+            ]),
+        };
+        let mut w = Vec::new();
+        let g = normalize(&raw, &mut w).gps.expect("gps");
+        assert_eq!(g.lat_e7, 100_000_000); // EXIF 的 10°，非 XMP 的 39°
     }
 }
