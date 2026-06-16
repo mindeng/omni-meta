@@ -12,6 +12,29 @@ const TAG_DATETIME_ORIGINAL: u16 = 0x9003; // Exif IFD
 const TAG_OFFSET_TIME: u16 = 0x9010; // 对应 0x0132
 const TAG_OFFSET_TIME_ORIGINAL: u16 = 0x9011; // 对应 0x9003
 
+/// 度（f64）→ E7（i32）。隔离的 f64 换算：手动 ±0.5 偏置后 `as i32` 取整（no_std 无 round()）。
+/// 非有限 / 越 i32 界 → None（不臆造）。
+fn deg_to_e7(deg: f64) -> Option<i32> {
+    let bias = if deg < 0.0 { -0.5 } else { 0.5 };
+    let scaled = deg * 1e7 + bias;
+    if scaled.is_finite() && scaled >= i32::MIN as f64 && scaled < i32::MAX as f64 + 1.0 {
+        Some(scaled as i32)
+    } else {
+        None
+    }
+}
+
+/// 米（f64）→ 毫米（i32），规则同 deg_to_e7。
+fn meters_to_mm(m: f64) -> Option<i32> {
+    let bias = if m < 0.0 { -0.5 } else { 0.5 };
+    let scaled = m * 1000.0 + bias;
+    if scaled.is_finite() && scaled >= i32::MIN as f64 && scaled < i32::MAX as f64 + 1.0 {
+        Some(scaled as i32)
+    } else {
+        None
+    }
+}
+
 /// 把原始标签投影到统一模型。
 ///
 /// 遇到“存在但取值超出规范范围”的标签（如 orientation 不在 1..=8）时，
@@ -316,5 +339,21 @@ mod tests {
             let u = normalize(&raw, &mut w);
             assert_eq!(u.created, None, "input {bad:?} 应判为无效");
         }
+    }
+
+    #[test]
+    fn deg_to_e7_rounds_and_signs() {
+        assert_eq!(super::deg_to_e7(27.5916), Some(275_916_000));
+        assert_eq!(super::deg_to_e7(-86.5640), Some(-865_640_000));
+        assert_eq!(super::deg_to_e7(0.0), Some(0));
+        assert_eq!(super::deg_to_e7(1e30), None);
+        assert_eq!(super::deg_to_e7(f64::NAN), None);
+    }
+
+    #[test]
+    fn meters_to_mm_rounds() {
+        assert_eq!(super::meters_to_mm(8850.0), Some(8_850_000));
+        assert_eq!(super::meters_to_mm(-10.5), Some(-10_500));
+        assert_eq!(super::meters_to_mm(1e30), None);
     }
 }
