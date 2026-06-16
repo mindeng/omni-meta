@@ -33,6 +33,8 @@ pub enum Event<'a> {
     Payload { kind: PayloadKind, data: &'a [u8] },
     /// 容器原生字段（width/height 等）。
     Field(Field),
+    /// 容器原生 key-value 标签（QuickTime mdta / udta），原样入 raw.container。
+    ContainerTag(crate::model::ContainerTag),
     Warning(Warning),
 }
 

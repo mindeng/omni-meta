@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use crate::codecs;
 use crate::demand::{Demand, Event, MetaParser, PayloadKind};
 use crate::limits::Limits;
-use crate::model::{ExifTag, Field, FileFormat, Metadata, RawTags, WarnKind, Warning, XmpProperty};
+use crate::model::{ContainerTag, ExifTag, Field, FileFormat, Metadata, RawTags, WarnKind, Warning, XmpProperty};
 use crate::normalize::normalize;
 
 /// 解析过程中累积的产物。
@@ -22,6 +22,7 @@ pub struct Collector {
     gps: Option<crate::model::Gps>,
     camera_make: Option<alloc::string::String>,
     camera_model: Option<alloc::string::String>,
+    container: Vec<ContainerTag>,
     limits: Limits,
 }
 
@@ -45,6 +46,11 @@ impl Collector {
                 }
             }
             Event::Warning(w) => self.warnings.push(w),
+            Event::ContainerTag(t) => {
+                if self.container.len() < self.limits.max_tags {
+                    self.container.push(t);
+                }
+            }
             Event::Field(Field::Duration(ms)) => {
                 if self.duration_ms.is_none() {
                     self.duration_ms = Some(ms);
@@ -91,7 +97,7 @@ pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
     let (width, height) = (col.width, col.height);
     let (duration_ms, created) = (col.duration_ms, col.created);
     let (gps, camera_make, camera_model) = (col.gps, col.camera_make, col.camera_model);
-    let raw = RawTags { exif: col.exif, xmp: col.xmp, container: Vec::new() };
+    let raw = RawTags { exif: col.exif, xmp: col.xmp, container: col.container };
     let mut warnings = col.warnings;
     let mut unified = normalize(&raw, &mut warnings);
     if let Some(w) = width {
@@ -149,6 +155,7 @@ impl StreamDriver {
                 gps: None,
                 camera_make: None,
                 camera_model: None,
+                container: Vec::new(),
                 limits,
             },
             skip_remaining: 0,
@@ -356,6 +363,7 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
         gps: None,
         camera_make: None,
         camera_model: None,
+        container: Vec::new(),
         limits,
     };
     let mut pos: usize = 0;
@@ -941,6 +949,30 @@ mod tests {
         assert_eq!(meta.unified.gps, Some(Gps { lat_e7: 1, lon_e7: 2, alt_mm: Some(3) }));
         assert_eq!(meta.unified.camera_make.as_deref(), Some("Apple"));
         assert_eq!(meta.unified.camera_model.as_deref(), Some("iPhone 15"));
+    }
+
+    #[test]
+    fn collector_accumulates_container_tags_and_caps_at_max_tags() {
+        use crate::model::{ContainerSource, ContainerTag, Value};
+        let mut limits = crate::limits::Limits::default();
+        limits.max_tags = 2;
+        let mut col = Collector {
+            exif: Vec::new(),
+            xmp: Vec::new(),
+            warnings: Vec::new(),
+            width: None, height: None, duration_ms: None, created: None,
+            gps: None, camera_make: None, camera_model: None,
+            container: Vec::new(),
+            limits,
+        };
+        for i in 0..5u32 {
+            col.handle(Event::ContainerTag(ContainerTag {
+                source: ContainerSource::QuickTimeMdta,
+                key: alloc::format!("k{i}"),
+                value: Value::Text(alloc::string::String::from("v")),
+            }));
+        }
+        assert_eq!(col.container.len(), 2, "超过 max_tags 的标签须被丢弃");
     }
 
     fn make_tiff() -> Vec<u8> {
