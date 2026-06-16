@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use crate::containers::isobmff::{full_box_vf, iter_child_boxes, read_box_header, read_uint_be};
 use crate::cursor::{ByteCursor, Endian};
 use crate::demand::{Demand, Event, MetaParser, PayloadKind, PullResult};
-use crate::model::{DateTimeParts, Field, WarnKind, Warning};
+use crate::model::{DateTimeParts, Field, Gps, WarnKind, Warning};
 
 /// MP4/MOV 纪元起点（1904-01-01）相对 Unix 纪元（1970-01-01）的天数差。
 const MP4_EPOCH_DAYS_BEFORE_UNIX: i64 = 24107;
@@ -699,6 +699,89 @@ impl BmffParser {
     }
 }
 
+/// 解析有符号十进制 "±D.DDDD" → 值 × 10^scale（截断超精度位）。i64 防溢出；格式不符→None。
+fn scaled_decimal_i64(s: &str, scale_pow10: u32) -> Option<i64> {
+    let b = s.as_bytes();
+    if b.is_empty() {
+        return None;
+    }
+    let (neg, rest): (bool, &[u8]) = match b[0] {
+        b'+' => (false, &b[1..]),
+        b'-' => (true, &b[1..]),
+        _ => (false, b),
+    };
+    if rest.is_empty() {
+        return None;
+    }
+    let mut acc: i64 = 0;
+    let mut frac: u32 = 0;
+    let mut seen_dot = false;
+    let mut any = false;
+    for &c in rest {
+        if c == b'.' {
+            if seen_dot {
+                return None;
+            }
+            seen_dot = true;
+            continue;
+        }
+        if !c.is_ascii_digit() {
+            return None;
+        }
+        any = true;
+        if seen_dot {
+            if frac < scale_pow10 {
+                acc = acc.checked_mul(10)?.checked_add((c - b'0') as i64)?;
+                frac += 1;
+            }
+        } else {
+            acc = acc.checked_mul(10)?.checked_add((c - b'0') as i64)?;
+        }
+    }
+    if !any {
+        return None;
+    }
+    let pad = scale_pow10.checked_sub(frac)?;
+    for _ in 0..pad {
+        acc = acc.checked_mul(10)?;
+    }
+    Some(if neg { -acc } else { acc })
+}
+
+/// 解析 ISO 6709 串（©xyz / mdta location.ISO6709）→ Gps。
+/// 形如 "+27.5916+086.5640+8850/"：按 +/- 切有符号十进制段 → ①纬 ②经 ③可选高(米)。
+fn parse_iso6709(s: &str) -> Option<Gps> {
+    let s = s.trim().trim_end_matches('/');
+    // ISO 6709 串必须以符号字符起始；拒绝前缀垃圾（如 "foo+1.0+2.0"）。
+    if !matches!(s.as_bytes().first(), Some(b'+' | b'-')) {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut fields: Vec<&str> = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, &c) in bytes.iter().enumerate() {
+        if c == b'+' || c == b'-' {
+            if let Some(st) = start {
+                fields.push(&s[st..i]);
+            }
+            start = Some(i);
+        }
+    }
+    if let Some(st) = start {
+        fields.push(&s[st..]);
+    }
+    if fields.len() < 2 {
+        return None;
+    }
+    let lat = i32::try_from(scaled_decimal_i64(fields[0], 7)?).ok()?;
+    let lon = i32::try_from(scaled_decimal_i64(fields[1], 7)?).ok()?;
+    let alt_mm = fields
+        .get(2)
+        .and_then(|f| scaled_decimal_i64(f, 3))
+        .and_then(|v| i32::try_from(v).ok());
+    Some(Gps { lat_e7: lat, lon_e7: lon, alt_mm })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1344,5 +1427,29 @@ mod tests {
         buf.extend_from_slice(&moov);
         let col = crate::driver::drive_slice(&buf, &mut BmffParser::new(), crate::limits::Limits::default());
         assert!(col.warnings.iter().any(|w| w.kind == WarnKind::Truncated));
+    }
+
+    #[test]
+    fn iso6709_parses_lat_lon_alt() {
+        let g = parse_iso6709("+27.5916+086.5640+8850/").expect("gps");
+        assert!((g.lat_e7 - 275_916_000).abs() <= 2);
+        assert!((g.lon_e7 - 865_640_000).abs() <= 2);
+        assert_eq!(g.alt_mm, Some(8_850_000));
+    }
+
+    #[test]
+    fn iso6709_without_altitude() {
+        let g = parse_iso6709("+40.7128-074.0060/").expect("gps");
+        assert!((g.lat_e7 - 407_128_000).abs() <= 2);
+        assert!((g.lon_e7 + 740_060_000).abs() <= 2);
+        assert_eq!(g.alt_mm, None);
+    }
+
+    #[test]
+    fn iso6709_malformed_is_none() {
+        assert_eq!(parse_iso6709("garbage"), None);
+        assert_eq!(parse_iso6709("+27.5916"), None); // 缺经度
+        assert_eq!(parse_iso6709(""), None);
+        assert_eq!(parse_iso6709("foo+1.0+2.0"), None); // 前缀垃圾必须拒绝
     }
 }
