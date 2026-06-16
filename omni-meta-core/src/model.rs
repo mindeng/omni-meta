@@ -85,6 +85,23 @@ pub struct Gps {
     pub alt_mm: Option<i32>,
 }
 
+/// 容器原生标签的命名空间来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerSource {
+    /// QuickTime `moov/meta/ilst`，键为反向 DNS 全名。
+    QuickTimeMdta,
+    /// QuickTime `moov/udta` 的 `©`-atoms，键为 FourCC（© → U+00A9）。
+    Udta,
+}
+
+/// 一条容器原生标签（QuickTime mdta / udta ©-atoms）。复用 `Value` 表示值。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerTag {
+    pub source: ContainerSource,
+    pub key: String,
+    pub value: Value,
+}
+
 /// 容器原生字段（解析器直接从头部读出，不经 codec）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Field {
@@ -133,6 +150,7 @@ pub struct ExifTag {
 pub struct RawTags {
     pub exif: Vec<ExifTag>,
     pub xmp: Vec<XmpProperty>,
+    pub container: Vec<ContainerTag>,
 }
 
 /// 统一规范层。全部 Option —— 缺失即 None，绝不臆造。
@@ -300,5 +318,27 @@ mod tests {
             Field::CameraModel(String::from("iPhone 15")),
             Field::CameraModel(String::from("iPhone 14"))
         );
+    }
+
+    #[test]
+    fn container_tag_constructs_and_eq() {
+        let a = ContainerTag {
+            source: ContainerSource::QuickTimeMdta,
+            key: String::from("com.apple.quicktime.software"),
+            value: Value::Text(String::from("13.5.1")),
+        };
+        let b = ContainerTag {
+            source: ContainerSource::QuickTimeMdta,
+            key: String::from("com.apple.quicktime.software"),
+            value: Value::Text(String::from("13.5.1")),
+        };
+        assert_eq!(a, b);
+        assert_ne!(a.source, ContainerSource::Udta);
+    }
+
+    #[test]
+    fn rawtags_default_has_empty_container() {
+        let r = RawTags::default();
+        assert!(r.container.is_empty());
     }
 }

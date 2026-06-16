@@ -91,7 +91,7 @@ pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
     let (width, height) = (col.width, col.height);
     let (duration_ms, created) = (col.duration_ms, col.created);
     let (gps, camera_make, camera_model) = (col.gps, col.camera_make, col.camera_model);
-    let raw = RawTags { exif: col.exif, xmp: col.xmp };
+    let raw = RawTags { exif: col.exif, xmp: col.xmp, container: Vec::new() };
     let mut warnings = col.warnings;
     let mut unified = normalize(&raw, &mut warnings);
     if let Some(w) = width {

@@ -438,6 +438,7 @@ mod tests {
                 ExifTag { ifd: IfdKind::Primary, tag: 0x0112, value: Value::U16(6) },
             ]),
             xmp: Vec::new(),
+            container: Vec::new(),
         };
         let mut warnings = Vec::new();
         let u = normalize(&raw, &mut warnings);
@@ -452,6 +453,7 @@ mod tests {
         let raw = RawTags {
             exif: Vec::from([ExifTag { ifd: IfdKind::Primary, tag: 0x0112, value: Value::U16(99) }]),
             xmp: Vec::new(),
+            container: Vec::new(),
         };
         let mut warnings = Vec::new();
         let u = normalize(&raw, &mut warnings);
@@ -479,6 +481,7 @@ mod tests {
                 xmp("tiff", "ImageWidth", "1280"),
                 xmp("tiff", "ImageLength", "720"),
             ]),
+            container: Vec::new(),
         };
         let mut warnings = Vec::new();
         let u = normalize(&raw, &mut warnings);
@@ -498,6 +501,7 @@ mod tests {
                 value: Value::Text(String::from("ExifMake")),
             }]),
             xmp: Vec::from([xmp("tiff", "Make", "XmpMake")]),
+            container: Vec::new(),
         };
         let mut warnings = Vec::new();
         let u = normalize(&raw, &mut warnings);
@@ -514,6 +518,7 @@ mod tests {
                 ExifTag { ifd: IfdKind::Thumbnail, tag: 0x0112, value: Value::U16(6) },
             ]),
             xmp: Vec::new(),
+            container: Vec::new(),
         };
         let mut warnings = Vec::new();
         let u = normalize(&raw, &mut warnings);
@@ -530,6 +535,7 @@ mod tests {
         let raw = RawTags {
             exif: Vec::from([exif_tag(IfdKind::Exif, 0x9003, "2003:01:24 09:20:00")]),
             xmp: Vec::new(),
+            container: Vec::new(),
         };
         let mut w = Vec::new();
         let u = normalize(&raw, &mut w);
@@ -546,6 +552,7 @@ mod tests {
                 exif_tag(IfdKind::Exif, 0x9011, "+09:00"),
             ]),
             xmp: Vec::new(),
+            container: Vec::new(),
         };
         let mut w = Vec::new();
         let u = normalize(&raw, &mut w);
@@ -560,6 +567,7 @@ mod tests {
                 exif_tag(IfdKind::Exif, 0x9010, "-05:00"),
             ]),
             xmp: Vec::new(),
+            container: Vec::new(),
         };
         let mut w = Vec::new();
         let u = normalize(&raw, &mut w);
@@ -576,6 +584,7 @@ mod tests {
                 exif_tag(IfdKind::Exif, 0x9003, "2003:01:24 09:20:00"),
             ]),
             xmp: Vec::new(),
+            container: Vec::new(),
         };
         let mut w = Vec::new();
         let u = normalize(&raw, &mut w);
@@ -588,6 +597,7 @@ mod tests {
             let raw = RawTags {
                 exif: Vec::from([exif_tag(IfdKind::Exif, 0x9003, bad)]),
                 xmp: Vec::new(),
+                container: Vec::new(),
             };
             let mut w = Vec::new();
             let u = normalize(&raw, &mut w);
@@ -626,6 +636,7 @@ mod tests {
                     value: Value::List(Vec::from([rat(86, 1), rat(33, 1), rat(504, 10)])) },
             ]),
             xmp: Vec::new(),
+            container: Vec::new(),
         };
         let mut w = Vec::new();
         let g = normalize(&raw, &mut w).gps.expect("gps");
@@ -648,6 +659,7 @@ mod tests {
                 ExifTag { ifd: IfdKind::Gps, tag: 0x0006, value: rat(105, 10) }, // 10.5 m
             ]),
             xmp: Vec::new(),
+            container: Vec::new(),
         };
         let mut w = Vec::new();
         let g = normalize(&raw, &mut w).gps.expect("gps");
@@ -665,6 +677,7 @@ mod tests {
                     value: Value::List(Vec::from([rat(10, 1), rat(0, 1), rat(0, 1)])) },
             ]),
             xmp: Vec::new(),
+            container: Vec::new(),
         };
         let mut w = Vec::new();
         let u = normalize(&raw, &mut w);
@@ -685,6 +698,7 @@ mod tests {
                 xmp_p("exif", "GPSLatitude", "39,57.0900N"),
                 xmp_p("exif", "GPSLongitude", "116,23.4000E"),
             ]),
+            container: Vec::new(),
         };
         let mut w = Vec::new();
         let g = normalize(&raw, &mut w).gps.expect("gps");
@@ -737,6 +751,7 @@ mod tests {
                 xmp_p("exif", "GPSLatitude", "39,57.0900N"),
                 xmp_p("exif", "GPSLongitude", "116,23.4000E"),
             ]),
+            container: Vec::new(),
         };
         let mut w = Vec::new();
         let g = normalize(&raw, &mut w).gps.expect("gps");
@@ -752,6 +767,7 @@ mod tests {
                 xmp_p("exif", "GPSLatitude", "39.9515N"),
                 xmp_p("exif", "GPSLongitude", "116.3900E"),
             ]),
+            container: Vec::new(),
         };
         let mut w = Vec::new();
         let g = normalize(&raw, &mut w).gps.expect("gps");
@@ -768,6 +784,7 @@ mod tests {
                 xmp_p("exif", "GPSLatitude", "39,57.0900N"),
                 xmp_p("exif", "GPSLongitude", "116,23.4000E"),
             ]),
+            container: Vec::new(),
         };
         let mut w = Vec::new();
         let g = normalize(&raw, &mut w).gps.expect("gps");
