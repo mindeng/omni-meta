@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use crate::containers::isobmff::{full_box_vf, iter_child_boxes, read_box_header, read_uint_be};
 use crate::cursor::{ByteCursor, Endian};
 use crate::demand::{Demand, Event, MetaParser, PayloadKind, PullResult};
-use crate::model::{DateTimeParts, Field, Gps, WarnKind, Warning};
+use crate::model::{ContainerSource, ContainerTag, DateTimeParts, Field, Gps, Value, WarnKind, Warning};
 
 /// MP4/MOV 纪元起点（1904-01-01）相对 Unix 纪元（1970-01-01）的天数差。
 const MP4_EPOCH_DAYS_BEFORE_UNIX: i64 = 24107;
@@ -124,7 +124,7 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64) -> MoovInfo {
     };
     let mut xyz_gps: Option<Gps> = None;
     let mut loci_gps: Option<Gps> = None;
-    let mut mdta = QtMdta { gps: None, make: None, model: None, created: None };
+    let mut mdta = QtMdta { gps: None, make: None, model: None, created: None, tags: alloc::vec::Vec::new() };
     for (hdr, p) in iter_child_boxes(moov_payload) {
         match &hdr.kind {
             b"mvhd" => {
@@ -909,6 +909,7 @@ struct QtMdta {
     make: Option<alloc::string::String>,
     model: Option<alloc::string::String>,
     created: Option<DateTimeParts>,
+    tags: alloc::vec::Vec<ContainerTag>,
 }
 
 /// 解析 QuickTime `moov/meta`（**非 FullBox** 容器）：hdlr(校验 mdta) + keys + ilst。
@@ -916,7 +917,7 @@ struct QtMdta {
 /// 注意：个别写入方（如 FCP7）在 moov/meta 前置 4 字节规范外 version/flags；
 /// 本实现不兼容该情形，遇此则 mdta 字段静默为空（无警告）。
 fn parse_qt_mdta(meta_payload: &[u8]) -> QtMdta {
-    let mut out = QtMdta { gps: None, make: None, model: None, created: None };
+    let mut out = QtMdta { gps: None, make: None, model: None, created: None, tags: alloc::vec::Vec::new() };
     let mut keys: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
     let mut is_mdta = false;
     let mut ilst_payload: Option<&[u8]> = None;
@@ -945,7 +946,7 @@ fn parse_qt_mdta(meta_payload: &[u8]) -> QtMdta {
             continue;
         }
         let key = &keys[idx as usize - 1];
-        let Some((_type_code, value)) = qt_data_typed(item_payload) else { continue };
+        let Some((type_code, value)) = qt_data_typed(item_payload) else { continue };
         match key.as_str() {
             "com.apple.quicktime.location.ISO6709" => {
                 if out.gps.is_none()
@@ -976,6 +977,28 @@ fn parse_qt_mdta(meta_payload: &[u8]) -> QtMdta {
                 }
             }
             _ => {}
+        }
+        // raw 层：UTF-8 文本键（type==1）原样入 container；focal length 整数（type 21/22）→ U32。
+        const DATA_UTF8: u32 = 1;
+        const DATA_INT_SIGNED: u32 = 21;
+        const DATA_INT_UNSIGNED: u32 = 22;
+        if type_code == DATA_UTF8 {
+            if let Ok(s) = core::str::from_utf8(value) {
+                out.tags.push(ContainerTag {
+                    source: ContainerSource::QuickTimeMdta,
+                    key: alloc::string::String::from(key.as_str()),
+                    value: Value::Text(alloc::string::String::from(s)),
+                });
+            }
+        } else if (type_code == DATA_INT_SIGNED || type_code == DATA_INT_UNSIGNED)
+            && key.ends_with("focal_length.35mm_equivalent")
+            && let Some(n) = be_uint_u32(value)
+        {
+            out.tags.push(ContainerTag {
+                source: ContainerSource::QuickTimeMdta,
+                key: alloc::string::String::from(key.as_str()),
+                value: Value::U32(n),
+            });
         }
     }
     out
@@ -1016,6 +1039,16 @@ fn parse_qt_keys(payload: &[u8]) -> alloc::vec::Vec<alloc::string::String> {
         }
     }
     out
+}
+
+/// 大端无符整数（1/2/4 字节）→ u32；其它长度 → None。
+fn be_uint_u32(b: &[u8]) -> Option<u32> {
+    match b.len() {
+        1 => Some(u32::from(b[0])),
+        2 => Some(u32::from(u16::from_be_bytes(b.try_into().ok()?))),
+        4 => Some(u32::from_be_bytes(b.try_into().ok()?)),
+        _ => None,
+    }
 }
 
 /// 从 ilst item 载荷取内层 `data` atom 的 (类型码, 值)。
@@ -1901,5 +1934,66 @@ mod tests {
         let (ty, val) = qt_data_typed(&item).expect("data");
         assert_eq!(ty, 1);
         assert_eq!(val, b"hi");
+    }
+
+    /// 同 qt_meta_with_keys，但每键带 data 类型码。
+    fn qt_meta_with_typed_keys(items: &[(&str, u32, &[u8])]) -> alloc::vec::Vec<u8> {
+        let mut hdlr = alloc::vec::Vec::new();
+        hdlr.extend_from_slice(&[0u8; 8]);
+        hdlr.extend_from_slice(b"mdta");
+        hdlr.extend_from_slice(&[0u8; 12]);
+        hdlr.push(0);
+
+        let mut keys = alloc::vec::Vec::new();
+        keys.extend_from_slice(&[0u8; 4]);
+        keys.extend_from_slice(&(items.len() as u32).to_be_bytes());
+        for (k, _, _) in items {
+            let entry_size = 8 + k.len();
+            keys.extend_from_slice(&(entry_size as u32).to_be_bytes());
+            keys.extend_from_slice(b"mdta");
+            keys.extend_from_slice(k.as_bytes());
+        }
+
+        let mut ilst = alloc::vec::Vec::new();
+        for (i, (_, ty, v)) in items.iter().enumerate() {
+            let idx = (i as u32) + 1;
+            let mut data = alloc::vec::Vec::new();
+            data.extend_from_slice(&ty.to_be_bytes());
+            data.extend_from_slice(&0u32.to_be_bytes()); // locale
+            data.extend_from_slice(v);
+            let data_box = box_bytes(b"data", &data);
+            let mut item_box = alloc::vec::Vec::new();
+            item_box.extend_from_slice(&((8 + data_box.len()) as u32).to_be_bytes());
+            item_box.extend_from_slice(&idx.to_be_bytes());
+            item_box.extend_from_slice(&data_box);
+            ilst.extend_from_slice(&item_box);
+        }
+
+        let mut meta = alloc::vec::Vec::new();
+        meta.extend_from_slice(&box_bytes(b"hdlr", &hdlr));
+        meta.extend_from_slice(&box_bytes(b"keys", &keys));
+        meta.extend_from_slice(&box_bytes(b"ilst", &ilst));
+        meta
+    }
+
+    #[test]
+    fn parse_qt_mdta_captures_text_and_focal_length_tags() {
+        use crate::model::{ContainerSource, Value};
+        let meta = qt_meta_with_typed_keys(&[
+            ("com.apple.quicktime.software", 1, b"13.5.1"),
+            ("com.apple.quicktime.author", 1, b"Jane"),
+            ("com.apple.quicktime.camera.focal_length.35mm_equivalent", 22, &28u32.to_be_bytes()),
+            ("com.apple.quicktime.junkbinary", 13, &[0xFF, 0xD8, 0xFF]), // JPEG 类型 → 跳过
+        ]);
+        let out = parse_qt_mdta(&meta);
+        let find = |k: &str| out.tags.iter().find(|t| t.key == k);
+        assert!(matches!(find("com.apple.quicktime.software").map(|t| &t.value),
+            Some(Value::Text(s)) if s == "13.5.1"));
+        assert!(matches!(find("com.apple.quicktime.author").map(|t| &t.value),
+            Some(Value::Text(s)) if s == "Jane"));
+        assert!(matches!(find("com.apple.quicktime.camera.focal_length.35mm_equivalent").map(|t| &t.value),
+            Some(Value::U32(28))));
+        assert!(find("com.apple.quicktime.junkbinary").is_none(), "二进制类型不收");
+        assert!(out.tags.iter().all(|t| t.source == ContainerSource::QuickTimeMdta));
     }
 }
