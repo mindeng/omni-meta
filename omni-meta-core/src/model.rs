@@ -76,6 +76,15 @@ pub struct DateTimeParts {
     pub tz_offset_min: Option<i16>,
 }
 
+/// 地理坐标。E7 = 度 × 10^7（±180e7 < i32 上限；Android/Google Location 行业标准定点）。
+/// `alt_mm` 高程毫米（正 = 海平面以上）。全整数 → 保留 Eq，无浮点相等脆弱性。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Gps {
+    pub lat_e7: i32,
+    pub lon_e7: i32,
+    pub alt_mm: Option<i32>,
+}
+
 /// 容器原生字段（解析器直接从头部读出，不经 codec）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
@@ -130,6 +139,7 @@ pub struct Unified {
     pub camera_model: Option<String>,
     pub duration_ms: Option<u64>,
     pub created: Option<DateTimeParts>,
+    pub gps: Option<Gps>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,5 +266,19 @@ mod tests {
     fn fileformat_has_ebml_family() {
         assert_ne!(FileFormat::Mkv, FileFormat::Webm);
         assert_ne!(FileFormat::Mkv, FileFormat::Unknown);
+    }
+
+    #[test]
+    fn gps_constructs_and_eq() {
+        let a = Gps { lat_e7: 275_916_000, lon_e7: 865_640_000, alt_mm: Some(8_850_000) };
+        let b = Gps { lat_e7: 275_916_000, lon_e7: 865_640_000, alt_mm: None };
+        assert_eq!(a.lat_e7, 275_916_000);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn unified_has_gps_defaulting_none() {
+        let u = Unified::default();
+        assert_eq!(u.gps, None);
     }
 }
