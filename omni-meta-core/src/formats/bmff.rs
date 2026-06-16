@@ -856,6 +856,129 @@ fn parse_iso6709(s: &str) -> Option<Gps> {
     Some(Gps { lat_e7: lat, lon_e7: lon, alt_mm })
 }
 
+/// QuickTime mdta 抽取产物。
+struct QtMdta {
+    gps: Option<Gps>,
+    make: Option<alloc::string::String>,
+    model: Option<alloc::string::String>,
+    created: Option<DateTimeParts>,
+}
+
+/// 解析 QuickTime `moov/meta`（**非 FullBox** 容器）：hdlr(校验 mdta) + keys + ilst。
+/// 任一缺失/畸形 → 对应字段 None，绝不 panic。
+fn parse_qt_mdta(meta_payload: &[u8]) -> QtMdta {
+    let mut out = QtMdta { gps: None, make: None, model: None, created: None };
+    let mut keys: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
+    let mut is_mdta = false;
+    let mut ilst_payload: Option<&[u8]> = None;
+
+    for (hdr, p) in iter_child_boxes(meta_payload) {
+        match &hdr.kind {
+            b"hdlr" => {
+                // hdlr 载荷：version/flags(4) + pre_defined(4) + handler_type(4)
+                if p.get(8..12).map(|s| s == b"mdta").unwrap_or(false) {
+                    is_mdta = true;
+                }
+            }
+            b"keys" => keys = parse_qt_keys(p),
+            b"ilst" => ilst_payload = Some(p),
+            _ => {}
+        }
+    }
+    if !is_mdta {
+        return out;
+    }
+    let Some(ilst) = ilst_payload else { return out };
+
+    for (hdr, item_payload) in iter_child_boxes(ilst) {
+        let idx = u32::from_be_bytes(hdr.kind);
+        if idx == 0 || (idx as usize) > keys.len() {
+            continue;
+        }
+        let key = &keys[idx as usize - 1];
+        let Some(value) = qt_data_value(item_payload) else { continue };
+        match key.as_str() {
+            "com.apple.quicktime.location.ISO6709" => {
+                if out.gps.is_none()
+                    && let Ok(s) = core::str::from_utf8(value)
+                {
+                    out.gps = parse_iso6709(s);
+                }
+            }
+            "com.apple.quicktime.make" => {
+                if out.make.is_none()
+                    && let Ok(s) = core::str::from_utf8(value)
+                {
+                    out.make = Some(alloc::string::String::from(s));
+                }
+            }
+            "com.apple.quicktime.model" => {
+                if out.model.is_none()
+                    && let Ok(s) = core::str::from_utf8(value)
+                {
+                    out.model = Some(alloc::string::String::from(s));
+                }
+            }
+            "com.apple.quicktime.creationdate" => {
+                if out.created.is_none()
+                    && let Ok(s) = core::str::from_utf8(value)
+                {
+                    out.created = crate::normalize::parse_iso8601(s);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// 解析 `keys` 载荷（FullBox + entry_count + 逐项 size(4)+namespace(4)+key_string）。
+fn parse_qt_keys(payload: &[u8]) -> alloc::vec::Vec<alloc::string::String> {
+    let mut out = alloc::vec::Vec::new();
+    let mut cur = ByteCursor::new(payload);
+    if cur.seek(4).is_none() {
+        return out;
+    }
+    let count = match cur.u32(Endian::Big) {
+        Some(c) => c,
+        None => return out,
+    };
+    for _ in 0..count {
+        let entry_size = match cur.u32(Endian::Big) {
+            Some(s) => s as usize,
+            None => break,
+        };
+        if entry_size < 8 {
+            break;
+        }
+        if cur.take(4).is_none() {
+            break; // namespace
+        }
+        let key_len = entry_size - 8;
+        let key_bytes = match cur.take(key_len) {
+            Some(b) => b,
+            None => break,
+        };
+        match core::str::from_utf8(key_bytes) {
+            Ok(s) => out.push(alloc::string::String::from(s)),
+            // 非法 UTF-8：压入空串占位以保 1-based 索引对齐；
+            // 空串永不匹配任何目标键，在 ilst 阶段被安全跳过。
+            Err(_) => out.push(alloc::string::String::new()),
+        }
+    }
+    out
+}
+
+/// 从 ilst item 载荷取内层 `data` atom 的值（type(4)+locale(4) 之后的字节）。
+fn qt_data_value(item_payload: &[u8]) -> Option<&[u8]> {
+    for (hdr, p) in iter_child_boxes(item_payload) {
+        if &hdr.kind == b"data" {
+            return p.get(8..); // 跳过 type(4)+locale(4)
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1570,5 +1693,76 @@ mod tests {
     #[test]
     fn parse_loci_truncated_is_none() {
         assert_eq!(parse_loci(&[0u8, 0, 0, 0, 0, 0]), None);
+    }
+
+    /// 构造 QuickTime mdta meta：hdlr(mdta) + keys(键表) + ilst(索引→data)。
+    /// data atom: type(4)+locale(4)+payload。
+    fn qt_meta_with_keys(keys_and_vals: &[(&str, &[u8])]) -> alloc::vec::Vec<u8> {
+        let mut hdlr = alloc::vec::Vec::new();
+        hdlr.extend_from_slice(&[0u8; 8]); // version/flags + pre_defined
+        hdlr.extend_from_slice(b"mdta"); // handler_type
+        hdlr.extend_from_slice(&[0u8; 12]); // reserved(3*4)
+        hdlr.push(0); // name 空
+
+        let mut keys = alloc::vec::Vec::new();
+        keys.extend_from_slice(&[0u8; 4]); // version/flags
+        keys.extend_from_slice(&(keys_and_vals.len() as u32).to_be_bytes()); // entry_count
+        for (k, _) in keys_and_vals {
+            let entry_size = 8 + k.len();
+            keys.extend_from_slice(&(entry_size as u32).to_be_bytes());
+            keys.extend_from_slice(b"mdta"); // namespace
+            keys.extend_from_slice(k.as_bytes());
+        }
+
+        let mut ilst = alloc::vec::Vec::new();
+        for (i, (_, v)) in keys_and_vals.iter().enumerate() {
+            let idx = (i as u32) + 1;
+            let mut data = alloc::vec::Vec::new();
+            data.extend_from_slice(&[0u8; 4]); // type
+            data.extend_from_slice(&[0u8; 4]); // locale
+            data.extend_from_slice(v);
+            let data_box = box_bytes(b"data", &data);
+            let mut item = alloc::vec::Vec::new();
+            item.extend_from_slice(&data_box);
+            let mut item_box = alloc::vec::Vec::new();
+            item_box.extend_from_slice(&((8 + item.len()) as u32).to_be_bytes());
+            item_box.extend_from_slice(&idx.to_be_bytes()); // box "kind" = 索引
+            item_box.extend_from_slice(&item);
+            ilst.extend_from_slice(&item_box);
+        }
+
+        let mut meta = alloc::vec::Vec::new();
+        meta.extend_from_slice(&box_bytes(b"hdlr", &hdlr));
+        meta.extend_from_slice(&box_bytes(b"keys", &keys));
+        meta.extend_from_slice(&box_bytes(b"ilst", &ilst));
+        meta
+    }
+
+    #[test]
+    fn parse_qt_meta_harvests_four_keys() {
+        let meta = qt_meta_with_keys(&[
+            ("com.apple.quicktime.location.ISO6709", b"+27.5916+086.5640+8850/"),
+            ("com.apple.quicktime.make", b"Apple"),
+            ("com.apple.quicktime.model", b"iPhone 15"),
+            ("com.apple.quicktime.creationdate", b"2017-07-22T16:06:06+10:00"),
+        ]);
+        let out = parse_qt_mdta(&meta);
+        let g = out.gps.expect("gps");
+        assert!((g.lat_e7 - 275_916_000).abs() <= 2);
+        assert_eq!(out.make.as_deref(), Some("Apple"));
+        assert_eq!(out.model.as_deref(), Some("iPhone 15"));
+        assert_eq!(out.created.map(|d| d.year), Some(2017));
+        assert_eq!(out.created.and_then(|d| d.tz_offset_min), Some(600));
+    }
+
+    #[test]
+    fn parse_qt_meta_non_mdta_handler_is_empty() {
+        let mut hdlr = alloc::vec::Vec::new();
+        hdlr.extend_from_slice(&[0u8; 8]);
+        hdlr.extend_from_slice(b"vide");
+        hdlr.extend_from_slice(&[0u8; 12]);
+        let meta = box_bytes(b"hdlr", &hdlr);
+        let out = parse_qt_mdta(&meta);
+        assert!(out.gps.is_none() && out.make.is_none() && out.created.is_none());
     }
 }
