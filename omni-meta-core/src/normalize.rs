@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use crate::model::{DateTimeParts, IfdKind, Orientation, RawTags, Unified, Value, WarnKind, Warning};
+use crate::model::{DateTimeParts, Gps, IfdKind, Orientation, RawTags, Unified, Value, WarnKind, Warning};
 
 const TAG_MAKE: u16 = 0x010F;
 const TAG_MODEL: u16 = 0x0110;
@@ -33,6 +33,80 @@ fn meters_to_mm(m: f64) -> Option<i32> {
     } else {
         None
     }
+}
+
+const GPS_LAT_REF: u16 = 0x0001;
+const GPS_LAT: u16 = 0x0002;
+const GPS_LON_REF: u16 = 0x0003;
+const GPS_LON: u16 = 0x0004;
+const GPS_ALT_REF: u16 = 0x0005;
+const GPS_ALT: u16 = 0x0006;
+
+/// 把 Value（List 多有理数，或单个 Rational）取前 3 个有理数合成度（d + m/60 + s/3600）。
+fn dms_value_to_deg(v: &Value) -> Option<f64> {
+    let rats: Vec<(u32, u32)> = match v {
+        Value::List(items) => items
+            .iter()
+            .take(3)
+            .filter_map(|x| if let Value::Rational(n, d) = x { Some((*n, *d)) } else { None })
+            .collect(),
+        Value::Rational(n, d) => Vec::from([(*n, *d)]),
+        _ => return None,
+    };
+    if rats.is_empty() {
+        return None;
+    }
+    let mut deg = 0.0f64;
+    let mut scale = 1.0f64;
+    for (n, d) in rats {
+        if d == 0 {
+            return None;
+        }
+        deg += (n as f64 / d as f64) / scale;
+        scale *= 60.0;
+    }
+    Some(deg)
+}
+
+/// 从 EXIF GPS IFD 投影坐标。lat+lon 都成功才返回 Some；altitude 可选。
+fn gps_from_exif(raw: &RawTags) -> Option<Gps> {
+    let find = |tag: u16| raw.exif.iter().find(|t| t.ifd == IfdKind::Gps && t.tag == tag);
+    let lat_v = find(GPS_LAT)?;
+    let lon_v = find(GPS_LON)?;
+    let mut lat = dms_value_to_deg(&lat_v.value)?;
+    let mut lon = dms_value_to_deg(&lon_v.value)?;
+    if let Some(t) = find(GPS_LAT_REF)
+        && let Value::Text(s) = &t.value
+        && s.eq_ignore_ascii_case("S")
+    {
+        lat = -lat;
+    }
+    if let Some(t) = find(GPS_LON_REF)
+        && let Value::Text(s) = &t.value
+        && s.eq_ignore_ascii_case("W")
+    {
+        lon = -lon;
+    }
+    let lat_e7 = deg_to_e7(lat)?;
+    let lon_e7 = deg_to_e7(lon)?;
+    let alt_mm = find(GPS_ALT).and_then(|t| {
+        if let Value::Rational(n, d) = &t.value {
+            if *d == 0 {
+                return None;
+            }
+            let mut m = *n as f64 / *d as f64;
+            if let Some(r) = find(GPS_ALT_REF)
+                && let Value::Bytes(b) = &r.value
+                && b.first() == Some(&1)
+            {
+                m = -m;
+            }
+            meters_to_mm(m)
+        } else {
+            None
+        }
+    });
+    Some(Gps { lat_e7, lon_e7, alt_mm })
 }
 
 /// 把原始标签投影到统一模型。
@@ -114,6 +188,15 @@ pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
         dt.tz_offset_min = off_str.and_then(parse_exif_offset);
         u.created = Some(dt);
     }
+    // GPS：EXIF GPS IFD 优先。lat/lon 任一存在但整体无法合成 → UnrecognizedValue。
+    let has_gps_exif = raw.exif.iter().any(|t| {
+        t.ifd == IfdKind::Gps && (t.tag == GPS_LAT || t.tag == GPS_LON)
+    });
+    if let Some(g) = gps_from_exif(raw) {
+        u.gps = Some(g);
+    } else if has_gps_exif {
+        warnings.push(Warning { offset: 0, kind: WarnKind::UnrecognizedValue });
+    }
     u
 }
 
@@ -171,7 +254,7 @@ fn parse_exif_offset(s: &str) -> Option<i16> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ExifTag, IfdKind, XmpProperty};
+    use crate::model::{ExifTag, IfdKind, Value, WarnKind, XmpProperty};
     use alloc::string::String;
     use alloc::vec::Vec;
 
@@ -355,5 +438,66 @@ mod tests {
         assert_eq!(super::meters_to_mm(8850.0), Some(8_850_000));
         assert_eq!(super::meters_to_mm(-10.5), Some(-10_500));
         assert_eq!(super::meters_to_mm(1e30), None);
+    }
+
+    fn rat(n: u32, d: u32) -> Value { Value::Rational(n, d) }
+
+    #[test]
+    fn gps_from_exif_dms_four_quadrants() {
+        // 纬 27°35'29.76"N、经 86°33'50.4"W → 约 27.5916, -86.5640
+        let raw = RawTags {
+            exif: Vec::from([
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0001, value: Value::Text(String::from("N")) },
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0002,
+                    value: Value::List(Vec::from([rat(27, 1), rat(35, 1), rat(2976, 100)])) },
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0003, value: Value::Text(String::from("W")) },
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0004,
+                    value: Value::List(Vec::from([rat(86, 1), rat(33, 1), rat(504, 10)])) },
+            ]),
+            xmp: Vec::new(),
+        };
+        let mut w = Vec::new();
+        let g = normalize(&raw, &mut w).gps.expect("gps");
+        assert!((g.lat_e7 - 275_916_000).abs() <= 2, "lat_e7={}", g.lat_e7);
+        assert!((g.lon_e7 + 865_640_000).abs() <= 2, "lon_e7={}", g.lon_e7);
+        assert_eq!(g.alt_mm, None);
+    }
+
+    #[test]
+    fn gps_altitude_below_sea_level_is_negative() {
+        let raw = RawTags {
+            exif: Vec::from([
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0001, value: Value::Text(String::from("N")) },
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0002,
+                    value: Value::List(Vec::from([rat(10, 1), rat(0, 1), rat(0, 1)])) },
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0003, value: Value::Text(String::from("E")) },
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0004,
+                    value: Value::List(Vec::from([rat(20, 1), rat(0, 1), rat(0, 1)])) },
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0005, value: Value::Bytes(Vec::from([1u8])) },
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0006, value: rat(105, 10) }, // 10.5 m
+            ]),
+            xmp: Vec::new(),
+        };
+        let mut w = Vec::new();
+        let g = normalize(&raw, &mut w).gps.expect("gps");
+        assert_eq!(g.lat_e7, 100_000_000);
+        assert_eq!(g.lon_e7, 200_000_000);
+        assert_eq!(g.alt_mm, Some(-10_500));
+    }
+
+    #[test]
+    fn gps_only_latitude_yields_none_with_warning() {
+        let raw = RawTags {
+            exif: Vec::from([
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0001, value: Value::Text(String::from("N")) },
+                ExifTag { ifd: IfdKind::Gps, tag: 0x0002,
+                    value: Value::List(Vec::from([rat(10, 1), rat(0, 1), rat(0, 1)])) },
+            ]),
+            xmp: Vec::new(),
+        };
+        let mut w = Vec::new();
+        let u = normalize(&raw, &mut w);
+        assert_eq!(u.gps, None);
+        assert_eq!(w.iter().filter(|x| x.kind == WarnKind::UnrecognizedValue).count(), 1);
     }
 }
