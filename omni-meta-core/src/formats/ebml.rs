@@ -79,6 +79,44 @@ fn parse_info(payload: &[u8]) -> InfoData {
     out
 }
 
+/// 解析 `Tracks` 载荷 → 首个含非零 PixelWidth/Height 的视频轨维度。
+fn parse_tracks(payload: &[u8]) -> Option<(u32, u32)> {
+    for (hdr, p) in iter_child_elements(payload) {
+        if hdr.id != TRACK_ENTRY {
+            continue;
+        }
+        if let Some(dims) = track_entry_dims(p) {
+            return Some(dims);
+        }
+    }
+    None
+}
+
+/// 在一个 `TrackEntry` 内找 `Video` → (PixelWidth, PixelHeight)，任一为 0 / 缺失 → None。
+fn track_entry_dims(payload: &[u8]) -> Option<(u32, u32)> {
+    for (hdr, p) in iter_child_elements(payload) {
+        if hdr.id != VIDEO {
+            continue;
+        }
+        let mut w: Option<u32> = None;
+        let mut h: Option<u32> = None;
+        for (vh, vp) in iter_child_elements(p) {
+            match vh.id {
+                PIXEL_WIDTH => w = Some(read_uint(vp) as u32),
+                PIXEL_HEIGHT => h = Some(read_uint(vp) as u32),
+                _ => {}
+            }
+        }
+        if let (Some(w), Some(h)) = (w, h)
+            && w != 0
+            && h != 0
+        {
+            return Some((w, h));
+        }
+    }
+    None
+}
+
 #[derive(Debug, Default)]
 pub struct EbmlParser {
     done: bool,
@@ -171,5 +209,37 @@ mod tests {
         let zero = parse_info(&info_payload(Some(0), Some(5000.0), None));
         assert_eq!(zero.duration_ms, None);
         assert!(zero.invalid);
+    }
+
+    fn video_track(w: u32, h: u32) -> Vec<u8> {
+        let mut vid = Vec::new();
+        vid.extend_from_slice(&elem(&[0xB0], &w.to_be_bytes())); // PixelWidth
+        vid.extend_from_slice(&elem(&[0xBA], &h.to_be_bytes())); // PixelHeight
+        let video = elem(&[0xE0], &vid);
+        elem(&[0xAE], &video) // TrackEntry { Video }
+    }
+
+    fn audio_track() -> Vec<u8> {
+        // TrackEntry 无 Video 子元素（仅一个占位子元素 0x83 TrackType=2）
+        let inner = elem(&[0x83], &[2]);
+        elem(&[0xAE], &inner)
+    }
+
+    #[test]
+    fn parse_tracks_picks_first_video() {
+        let mut tracks = Vec::new();
+        tracks.extend_from_slice(&audio_track());          // 音频轨在前
+        tracks.extend_from_slice(&video_track(1280, 720)); // 视频轨
+        assert_eq!(parse_tracks(&tracks), Some((1280, 720)));
+    }
+
+    #[test]
+    fn parse_tracks_audio_only_is_none() {
+        assert_eq!(parse_tracks(&audio_track()), None);
+    }
+
+    #[test]
+    fn parse_tracks_zero_dims_is_none() {
+        assert_eq!(parse_tracks(&video_track(0, 0)), None);
     }
 }
