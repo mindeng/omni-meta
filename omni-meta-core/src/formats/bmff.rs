@@ -748,6 +748,68 @@ fn scaled_decimal_i64(s: &str, scale_pow10: u32) -> Option<i64> {
     Some(if neg { -acc } else { acc })
 }
 
+/// 16.16 有符号定点（i32）→ E7。隔离 f64：raw/65536 度 → E7（±0.5 偏置取整，no_std 无 round()）。
+fn fixed16_16_to_e7(raw: i32) -> Option<i32> {
+    let deg = raw as f64 / 65536.0;
+    let bias = if deg < 0.0 { -0.5 } else { 0.5 };
+    let scaled = deg * 1e7 + bias;
+    if scaled.is_finite() && scaled >= i32::MIN as f64 && scaled < i32::MAX as f64 + 1.0 {
+        Some(scaled as i32)
+    } else {
+        None
+    }
+}
+
+/// 16.16 有符号定点（i32，米）→ 毫米（i32）。
+fn fixed16_16_to_mm(raw: i32) -> Option<i32> {
+    let m = raw as f64 / 65536.0;
+    let bias = if m < 0.0 { -0.5 } else { 0.5 };
+    let scaled = m * 1000.0 + bias;
+    if scaled.is_finite() && scaled >= i32::MIN as f64 && scaled < i32::MAX as f64 + 1.0 {
+        Some(scaled as i32)
+    } else {
+        None
+    }
+}
+
+/// 计算 loci name 串占用的字节数（含终止符）。UTF-16（BOM 0xFEFF/0xFFFE）按 u16 对齐找 0x0000；
+/// 否则按 UTF-8 找单字节 0。找不到终止符 → None（畸形）。
+fn skip_loci_name(b: &[u8]) -> Option<usize> {
+    if b.len() >= 2 && ((b[0] == 0xFE && b[1] == 0xFF) || (b[0] == 0xFF && b[1] == 0xFE)) {
+        let mut i = 2;
+        while i + 1 < b.len() {
+            if b[i] == 0 && b[i + 1] == 0 {
+                return Some(i + 2);
+            }
+            i += 2;
+        }
+        None
+    } else {
+        b.iter().position(|&c| c == 0).map(|i| i + 1)
+    }
+}
+
+/// 解析 `loci`（3GPP FullBox）：ver/flags + lang(2) + name(变长 null 终止) + role(1)
+///   + lon(16.16) + lat(16.16) + alt(16.16)。**经在前**。越界 → None。
+fn parse_loci(payload: &[u8]) -> Option<Gps> {
+    let mut cur = ByteCursor::new(payload);
+    cur.seek(4)?; // version+flags（绝对跳到位置 4）
+    cur.u16(Endian::Big)?; // language（2 字节，读取并自动前进）
+    let pos = cur.position();
+    let rest = payload.get(pos..)?;
+    let name_len = skip_loci_name(rest)?;
+    cur.skip(name_len)?; // 跳过 name（含终止符）
+    cur.skip(1)?; // role
+    let lon_raw = cur.u32(Endian::Big)? as i32; // 3GPP loci: 经度(lon)先于纬度读出
+    let lat_raw = cur.u32(Endian::Big)? as i32;
+    let alt_raw = cur.u32(Endian::Big)? as i32;
+    Some(Gps {
+        lat_e7: fixed16_16_to_e7(lat_raw)?,
+        lon_e7: fixed16_16_to_e7(lon_raw)?,
+        alt_mm: fixed16_16_to_mm(alt_raw),
+    })
+}
+
 /// 解析 `©xyz` 载荷：u16 size + u16 lang + ISO6709 文本。越界/非 UTF-8 → None。
 /// 部分写入方 size 字段不可靠，取 size 失败时回退到「偏移 4 之后全部」。
 fn parse_xyz(payload: &[u8]) -> Option<Gps> {
@@ -1482,5 +1544,31 @@ mod tests {
     fn parse_xyz_truncated_is_none() {
         assert_eq!(parse_xyz(&[0u8, 5]), None); // 不足 size+lang
         assert_eq!(parse_xyz(&[]), None);
+    }
+
+    #[test]
+    fn parse_loci_lon_first_16_16() {
+        // loci FullBox: ver(1)+flags(3) + lang(2) + name("\0") + role(1)
+        //   + lon(16.16) + lat(16.16) + alt(16.16)。注意经在前。
+        let mut p = alloc::vec::Vec::new();
+        p.extend_from_slice(&[0u8, 0, 0, 0]); // version/flags
+        p.extend_from_slice(&0x15c7u16.to_be_bytes()); // language
+        p.push(0); // name 空串（null 终止）
+        p.push(0); // role
+        let lon_fixed = (86.5640f64 * 65536.0) as i32;
+        let lat_fixed = (27.5916f64 * 65536.0) as i32;
+        let alt_fixed = (8850.0f64 * 65536.0) as i32;
+        p.extend_from_slice(&lon_fixed.to_be_bytes());
+        p.extend_from_slice(&lat_fixed.to_be_bytes());
+        p.extend_from_slice(&alt_fixed.to_be_bytes());
+        let g = parse_loci(&p).expect("gps");
+        assert!((g.lat_e7 - 275_916_000).abs() <= 20_000, "lat_e7={}", g.lat_e7);
+        assert!((g.lon_e7 - 865_640_000).abs() <= 20_000, "lon_e7={}", g.lon_e7);
+        assert!((g.alt_mm.unwrap() - 8_850_000).abs() <= 20_000);
+    }
+
+    #[test]
+    fn parse_loci_truncated_is_none() {
+        assert_eq!(parse_loci(&[0u8, 0, 0, 0, 0, 0]), None);
     }
 }
