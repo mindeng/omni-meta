@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use crate::model::{DateTimeParts, Gps, IfdKind, Orientation, RawTags, Unified, Value, WarnKind, Warning};
+use crate::model::{ContainerSource, DateTimeParts, Gps, IfdKind, Orientation, RawTags, Unified, Value, WarnKind, Warning};
 
 const TAG_MAKE: u16 = 0x010F;
 const TAG_MODEL: u16 = 0x0110;
@@ -11,6 +11,8 @@ const TAG_DATETIME: u16 = 0x0132; // IFD0
 const TAG_DATETIME_ORIGINAL: u16 = 0x9003; // Exif IFD
 const TAG_OFFSET_TIME: u16 = 0x9010; // 对应 0x0132
 const TAG_OFFSET_TIME_ORIGINAL: u16 = 0x9011; // 对应 0x9003
+const TAG_SOFTWARE: u16 = 0x0131;
+const TAG_ARTIST: u16 = 0x013B;
 
 /// 度（f64）→ E7（i32）。隔离的 f64 换算：手动 ±0.5 偏置后 `as i32` 取整（no_std 无 round()）。
 /// 非有限 / 越 i32 界 → None（不臆造）。
@@ -208,11 +210,46 @@ fn gps_from_exif(raw: &RawTags) -> Option<Gps> {
     Some(Gps { lat_e7, lon_e7, alt_mm })
 }
 
+/// 取指定来源/键的容器文本标签值。
+fn container_text<'a>(raw: &'a RawTags, source: ContainerSource, key: &str) -> Option<&'a str> {
+    raw.container.iter().find_map(|t| {
+        if t.source == source && t.key == key
+            && let Value::Text(s) = &t.value
+        {
+            return Some(s.as_str());
+        }
+        None
+    })
+}
+
+/// 取 Primary IFD 指定 tag 的文本值。
+fn exif_primary_text(raw: &RawTags, tag: u16) -> Option<alloc::string::String> {
+    raw.exif.iter().find_map(|t| {
+        if t.ifd == IfdKind::Primary && t.tag == tag
+            && let Value::Text(s) = &t.value
+        {
+            return Some(s.clone());
+        }
+        None
+    })
+}
+
+/// 取指定 prefix/name 的 XMP 属性值。
+fn xmp_text(raw: &RawTags, prefix: &str, name: &str) -> Option<alloc::string::String> {
+    raw.xmp.iter().find_map(|p| {
+        if p.prefix == prefix && p.name == name {
+            Some(p.value.clone())
+        } else {
+            None
+        }
+    })
+}
+
 /// 把原始标签投影到统一模型。
 ///
-/// 遇到“存在但取值超出规范范围”的标签（如 orientation 不在 1..=8）时，
+/// 遇到”存在但取值超出规范范围”的标签（如 orientation 不在 1..=8）时，
 /// 丢弃该值并向 `warnings` 追加一条 `WarnKind::UnrecognizedValue`，使调用者能
-/// 区分“缺失”与“存在但无法识别”。normalize 作用于已解码标签、无字节偏移，
+/// 区分”缺失”与”存在但无法识别”。normalize 作用于已解码标签、无字节偏移，
 /// 故此类警告的 `offset` 固定为 0。
 pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
     let mut u = Unified::default();
@@ -301,6 +338,18 @@ pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
             u.gps = Some(g);
         }
     }
+    // software：容器 > EXIF(0x0131) > XMP(xmp:CreatorTool)
+    u.software = container_text(raw, ContainerSource::QuickTimeMdta, "com.apple.quicktime.software")
+        .or_else(|| container_text(raw, ContainerSource::Udta, "©swr"))
+        .map(alloc::string::String::from)
+        .or_else(|| exif_primary_text(raw, TAG_SOFTWARE))
+        .or_else(|| xmp_text(raw, "xmp", "CreatorTool"));
+    // creator：容器 > EXIF(0x013B Artist) > XMP(dc:creator)
+    u.creator = container_text(raw, ContainerSource::QuickTimeMdta, "com.apple.quicktime.author")
+        .or_else(|| container_text(raw, ContainerSource::Udta, "©aut"))
+        .map(alloc::string::String::from)
+        .or_else(|| exif_primary_text(raw, TAG_ARTIST))
+        .or_else(|| xmp_text(raw, "dc", "creator"));
     u
 }
 
@@ -790,5 +839,51 @@ mod tests {
         let g = normalize(&raw, &mut w).gps.expect("gps");
         assert!((g.lat_e7 - 399_515_000).abs() <= 2);
         assert!((g.lon_e7 - 1_163_900_000).abs() <= 2);
+    }
+
+    #[test]
+    fn software_precedence_container_over_exif_over_xmp() {
+        use crate::model::{ContainerSource, ContainerTag, ExifTag, IfdKind, Value, XmpProperty};
+        let mut warnings = Vec::new();
+        let raw = RawTags {
+            exif: alloc::vec![ExifTag { ifd: IfdKind::Primary, tag: 0x0131, value: Value::Text(alloc::string::String::from("ExifSW")) }],
+            xmp: alloc::vec![XmpProperty { prefix: alloc::string::String::from("xmp"), name: alloc::string::String::from("CreatorTool"), value: alloc::string::String::from("XmpSW") }],
+            container: alloc::vec![ContainerTag { source: ContainerSource::QuickTimeMdta, key: alloc::string::String::from("com.apple.quicktime.software"), value: Value::Text(alloc::string::String::from("ContainerSW")) }],
+        };
+        let u = normalize(&raw, &mut warnings);
+        assert_eq!(u.software.as_deref(), Some("ContainerSW"));
+    }
+
+    #[test]
+    fn software_falls_back_exif_then_xmp() {
+        use crate::model::{ExifTag, IfdKind, Value, XmpProperty};
+        let mut warnings = Vec::new();
+        let raw_exif = RawTags {
+            exif: alloc::vec![ExifTag { ifd: IfdKind::Primary, tag: 0x0131, value: Value::Text(alloc::string::String::from("ExifSW")) }],
+            xmp: Vec::new(), container: Vec::new(),
+        };
+        assert_eq!(normalize(&raw_exif, &mut warnings).software.as_deref(), Some("ExifSW"));
+        let raw_xmp = RawTags {
+            exif: Vec::new(),
+            xmp: alloc::vec![XmpProperty { prefix: alloc::string::String::from("xmp"), name: alloc::string::String::from("CreatorTool"), value: alloc::string::String::from("XmpSW") }],
+            container: Vec::new(),
+        };
+        assert_eq!(normalize(&raw_xmp, &mut warnings).software.as_deref(), Some("XmpSW"));
+    }
+
+    #[test]
+    fn creator_from_container_udta_and_exif_artist() {
+        use crate::model::{ContainerSource, ContainerTag, ExifTag, IfdKind, Value};
+        let mut warnings = Vec::new();
+        let raw_udta = RawTags {
+            exif: Vec::new(), xmp: Vec::new(),
+            container: alloc::vec![ContainerTag { source: ContainerSource::Udta, key: alloc::string::String::from("©aut"), value: Value::Text(alloc::string::String::from("Auteur")) }],
+        };
+        assert_eq!(normalize(&raw_udta, &mut warnings).creator.as_deref(), Some("Auteur"));
+        let raw_artist = RawTags {
+            exif: alloc::vec![ExifTag { ifd: IfdKind::Primary, tag: 0x013B, value: Value::Text(alloc::string::String::from("Shooter")) }],
+            xmp: Vec::new(), container: Vec::new(),
+        };
+        assert_eq!(normalize(&raw_artist, &mut warnings).creator.as_deref(), Some("Shooter"));
     }
 }
