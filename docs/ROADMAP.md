@@ -144,6 +144,7 @@ IPTC codec · ICC 摘要 · TIFF 顶层格式 · async/tokio 适配器 · Stripp
 - [ ] **fuzz**：每个新容器/codec 接 `cargo-fuzz`，断言永不 panic / 不超 `Limits` / 不死循环
 - [ ] **no_std CI**：每个里程碑验证 `--no-default-features`
 - [ ] **黄金样本**：真实小样本 + 期望 `Metadata` 快照
+- [ ] **待评估：视频朝向（orientation）** — 解析 `tkhd` 变换矩阵（当前 `parse_tkhd` 跳过矩阵区、只取末 8 字节维度）→ 推导旋转 → 投影 `Unified.orientation`（图像 EXIF orientation 作第二来源，可凑 ≥2）。与 QuickTime `video-orientation` 键是同一语义的两个来源，需一并评估优先级。
 
 ---
 
