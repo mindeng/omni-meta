@@ -15,7 +15,7 @@ pub struct Options {
 /// 从一整块内存缓冲解析元数据。无法识别格式时返回 Err。
 pub fn read_slice(buf: &[u8], opts: Options) -> Result<Metadata, Error> {
     let fmt = probe(buf);
-    match parser_for(fmt.clone()) {
+    match parser_for(fmt.clone(), opts.limits) {
         Some(mut parser) => {
             let col = drive_slice(buf, parser.as_mut(), opts.limits);
             Ok(finalize(col, fmt))

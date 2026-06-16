@@ -3,6 +3,7 @@
 use alloc::boxed::Box;
 
 use crate::demand::MetaParser;
+use crate::limits::Limits;
 use crate::model::FileFormat;
 
 /// 探测窗口上界：EBML DocType（区分 MKV/WebM）可能落在头部数十字节内。
@@ -79,14 +80,14 @@ fn find_doctype(buf: &[u8]) -> Option<&[u8]> {
 }
 
 /// 把已探测的格式映射到对应解析器。Unknown / 尚未实现的格式 → None。
-pub(crate) fn parser_for(fmt: FileFormat) -> Option<Box<dyn MetaParser>> {
+pub(crate) fn parser_for(fmt: FileFormat, limits: Limits) -> Option<Box<dyn MetaParser>> {
     match fmt {
         FileFormat::Jpeg => Some(Box::new(crate::formats::jpeg::JpegParser::new())),
         FileFormat::Png => Some(Box::new(crate::formats::png::PngParser::new())),
         FileFormat::Webp => Some(Box::new(crate::formats::webp::WebpParser::new())),
         FileFormat::Gif => Some(Box::new(crate::formats::gif::GifParser::new())),
         FileFormat::Heif | FileFormat::Avif | FileFormat::Mp4 | FileFormat::Mov => {
-            Some(Box::new(crate::formats::bmff::BmffParser::new()))
+            Some(Box::new(crate::formats::bmff::BmffParser::with_limits(limits)))
         }
         FileFormat::Mkv | FileFormat::Webm => {
             Some(Box::new(crate::formats::ebml::EbmlParser::new()))
@@ -113,15 +114,15 @@ mod tests {
 
     #[test]
     fn parser_for_jpeg_some_unknown_none() {
-        assert!(parser_for(FileFormat::Jpeg).is_some());
-        assert!(parser_for(FileFormat::Unknown).is_none());
+        assert!(parser_for(FileFormat::Jpeg, Limits::default()).is_some());
+        assert!(parser_for(FileFormat::Unknown, Limits::default()).is_none());
     }
 
     #[test]
     fn detects_png_signature() {
         let sig = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
         assert_eq!(probe(&sig), FileFormat::Png);
-        assert!(parser_for(FileFormat::Png).is_some());
+        assert!(parser_for(FileFormat::Png, Limits::default()).is_some());
     }
 
     #[test]
@@ -132,14 +133,14 @@ mod tests {
         b.extend_from_slice(&0u32.to_le_bytes());
         b.extend_from_slice(b"WEBP");
         assert_eq!(probe(&b), FileFormat::Webp);
-        assert!(parser_for(FileFormat::Webp).is_some());
+        assert!(parser_for(FileFormat::Webp, Limits::default()).is_some());
     }
 
     #[test]
     fn detects_gif_signature() {
         assert_eq!(probe(b"GIF89a\0\0\0\0\0\0\0"), FileFormat::Gif);
         assert_eq!(probe(b"GIF87a\0\0\0\0\0\0\0"), FileFormat::Gif);
-        assert!(parser_for(FileFormat::Gif).is_some());
+        assert!(parser_for(FileFormat::Gif, Limits::default()).is_some());
     }
 
     fn ftyp(major: &[u8; 4]) -> alloc::vec::Vec<u8> {
@@ -165,10 +166,10 @@ mod tests {
 
     #[test]
     fn bmff_parsers_wired() {
-        assert!(parser_for(FileFormat::Heif).is_some());
-        assert!(parser_for(FileFormat::Avif).is_some());
-        assert!(parser_for(FileFormat::Mp4).is_some());
-        assert!(parser_for(FileFormat::Mov).is_some());
+        assert!(parser_for(FileFormat::Heif, Limits::default()).is_some());
+        assert!(parser_for(FileFormat::Avif, Limits::default()).is_some());
+        assert!(parser_for(FileFormat::Mp4, Limits::default()).is_some());
+        assert!(parser_for(FileFormat::Mov, Limits::default()).is_some());
     }
 
     fn ebml(doctype: &[u8]) -> alloc::vec::Vec<u8> {
@@ -188,8 +189,8 @@ mod tests {
     fn detects_mkv_and_webm_via_doctype() {
         assert_eq!(probe(&ebml(b"webm")), FileFormat::Webm);
         assert_eq!(probe(&ebml(b"matroska")), FileFormat::Mkv);
-        assert!(parser_for(FileFormat::Mkv).is_some());
-        assert!(parser_for(FileFormat::Webm).is_some());
+        assert!(parser_for(FileFormat::Mkv, Limits::default()).is_some());
+        assert!(parser_for(FileFormat::Webm, Limits::default()).is_some());
     }
 
     #[test]

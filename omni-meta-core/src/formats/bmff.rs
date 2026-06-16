@@ -113,7 +113,8 @@ struct MoovInfo {
 /// 解析 `moov` 载荷：mvhd → 时长/创建时间；逐 trak → tkhd 取首个非零维度。
 /// 亦下钻 udta（©xyz/loci）与 meta（QuickTime mdta）取 GPS/make/model/creationdate。
 /// `moov_abs_base` 仅用于警告偏移保真。深度 2 显式迭代，非递归。
-fn parse_moov(moov_payload: &[u8], moov_abs_base: u64) -> MoovInfo {
+/// `max_tags`：各来源 container_tags 单独封顶；峰值 ≤ 2×max_tags，Collector 再裁到 max_tags。
+fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovInfo {
     let mut info = MoovInfo {
         dims: None,
         duration_ms: None,
@@ -153,13 +154,16 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64) -> MoovInfo {
                     match &uhdr.kind {
                         b"\xA9xyz" if xyz_gps.is_none() => xyz_gps = parse_xyz(up),
                         b"loci" if loci_gps.is_none() => loci_gps = parse_loci(up),
-                        k if k[0] == 0xA9 => {
-                            if let (Some(key), Some(text)) = (udta_key_string(k), parse_udta_text(up)) {
-                                udta_tags.push(ContainerTag {
-                                    source: ContainerSource::Udta,
-                                    key,
-                                    value: Value::Text(alloc::string::String::from(text)),
-                                });
+                        // ©xyz は GPS 専用；generic arm から除外（二重目も container に漏らさない）。
+                        k if k[0] == 0xA9 && k != b"\xA9xyz" => {
+                            if udta_tags.len() < max_tags {
+                                if let (Some(key), Some(text)) = (udta_key_string(k), parse_udta_text(up)) {
+                                    udta_tags.push(ContainerTag {
+                                        source: ContainerSource::Udta,
+                                        key,
+                                        value: Value::Text(alloc::string::String::from(text)),
+                                    });
+                                }
                             }
                         }
                         _ => {}
@@ -167,7 +171,7 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64) -> MoovInfo {
                 }
             }
             b"meta" => {
-                let m = parse_qt_mdta(p);
+                let m = parse_qt_mdta(p, max_tags);
                 if mdta.gps.is_none() { mdta.gps = m.gps; }
                 if mdta.make.is_none() { mdta.make = m.make; }
                 if mdta.model.is_none() { mdta.model = m.model; }
@@ -184,8 +188,10 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64) -> MoovInfo {
     // make/model：mdta 唯一视频来源。
     info.camera_make = mdta.make;
     info.camera_model = mdta.model;
+    // 各来源已独立封顶（峰值 ≤ 2×max_tags）；合并后再裁到 max_tags，使合并总量精确有界。
     info.container_tags = mdta.tags;
     info.container_tags.append(&mut udta_tags);
+    info.container_tags.truncate(max_tags);
     info
 }
 
@@ -576,11 +582,17 @@ pub struct BmffParser {
     idx: usize,
     /// method-0 目标，按 offset 升序。
     targets: Vec<Target>,
+    /// container_tags 源头上限（来自 Limits::max_tags）。
+    max_tags: usize,
 }
 
 impl BmffParser {
+    #[allow(dead_code)] // 公共 API：测试及外部调用者使用，no_std 构建中不可见
     pub fn new() -> Self {
-        Self::default()
+        Self::with_limits(crate::limits::Limits::default())
+    }
+    pub fn with_limits(limits: crate::limits::Limits) -> Self {
+        Self { max_tags: limits.max_tags, ..Self::default() }
     }
 }
 
@@ -695,7 +707,7 @@ impl BmffParser {
             if input.len() < need {
                 return PullResult { demand: Demand::NeedBytes(need), consumed: 0, events: Vec::new() };
             }
-            let info = parse_moov(&input[header_len..need], self.pos);
+            let info = parse_moov(&input[header_len..need], self.pos, self.max_tags);
             let mut events: Vec<Event<'a>> = Vec::new();
             if let Some((w, h)) = info.dims {
                 events.push(Event::Field(Field::Width(w)));
@@ -956,7 +968,8 @@ struct QtMdta {
 /// 任一缺失/畸形 → 对应字段 None，绝不 panic。
 /// 注意：个别写入方（如 FCP7）在 moov/meta 前置 4 字节规范外 version/flags；
 /// 本实现不兼容该情形，遇此则 mdta 字段静默为空（无警告）。
-fn parse_qt_mdta(meta_payload: &[u8]) -> QtMdta {
+/// `max_tags`：out.tags 源头上限，防 DoS 放大（Field 投影字段不受此限）。
+fn parse_qt_mdta(meta_payload: &[u8], max_tags: usize) -> QtMdta {
     let mut out = QtMdta { gps: None, make: None, model: None, created: None, tags: alloc::vec::Vec::new() };
     let mut keys: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
     let mut is_mdta = false;
@@ -1019,26 +1032,31 @@ fn parse_qt_mdta(meta_payload: &[u8]) -> QtMdta {
             _ => {}
         }
         // raw 层：UTF-8 文本键（type==1）原样入 container；focal length 整数（type 21/22）→ U32。
+        // 源头按 max_tags 封顶，防 DoS 放大。
         const DATA_UTF8: u32 = 1;
         const DATA_INT_SIGNED: u32 = 21;
         const DATA_INT_UNSIGNED: u32 = 22;
         if type_code == DATA_UTF8 {
-            if let Ok(s) = core::str::from_utf8(value) {
-                out.tags.push(ContainerTag {
-                    source: ContainerSource::QuickTimeMdta,
-                    key: alloc::string::String::from(key.as_str()),
-                    value: Value::Text(alloc::string::String::from(s)),
-                });
+            if out.tags.len() < max_tags {
+                if let Ok(s) = core::str::from_utf8(value) {
+                    out.tags.push(ContainerTag {
+                        source: ContainerSource::QuickTimeMdta,
+                        key: alloc::string::String::from(key.as_str()),
+                        value: Value::Text(alloc::string::String::from(s)),
+                    });
+                }
             }
         } else if (type_code == DATA_INT_SIGNED || type_code == DATA_INT_UNSIGNED)
             && key.ends_with("focal_length.35mm_equivalent")
             && let Some(n) = be_uint_u32(value)
         {
-            out.tags.push(ContainerTag {
-                source: ContainerSource::QuickTimeMdta,
-                key: alloc::string::String::from(key.as_str()),
-                value: Value::U32(n),
-            });
+            if out.tags.len() < max_tags {
+                out.tags.push(ContainerTag {
+                    source: ContainerSource::QuickTimeMdta,
+                    key: alloc::string::String::from(key.as_str()),
+                    value: Value::U32(n),
+                });
+            }
         }
     }
     out
@@ -1591,7 +1609,7 @@ mod tests {
         moov_p.extend_from_slice(&box_bytes(b"mvhd", &mvhd_v0(2_082_844_800, 600, 900_900)));
         moov_p.extend_from_slice(&trak(&tkhd_v0(0, 0)));        // 音频轨先出现
         moov_p.extend_from_slice(&trak(&tkhd_v0(1920, 1080)));  // 视频轨
-        let info = parse_moov(&moov_p, 0);
+        let info = parse_moov(&moov_p, 0, usize::MAX);
         assert_eq!(info.dims, Some((1920, 1080))); // 跳过 0×0，选视频
         assert_eq!(info.duration_ms, Some(1_501_500));
         assert_eq!(info.created.map(|d| d.year), Some(1970));
@@ -1602,7 +1620,7 @@ mod tests {
     fn parse_moov_timescale_zero_warns() {
         let mut moov_p = Vec::new();
         moov_p.extend_from_slice(&box_bytes(b"mvhd", &mvhd_v0(0, 0, 1000)));
-        let info = parse_moov(&moov_p, 0);
+        let info = parse_moov(&moov_p, 0, usize::MAX);
         assert_eq!(info.duration_ms, None);
         assert_eq!(info.warnings.len(), 1);
         assert_eq!(info.warnings[0].kind, WarnKind::UnrecognizedValue);
@@ -1610,7 +1628,7 @@ mod tests {
 
     #[test]
     fn parse_moov_no_mvhd_no_trak_is_empty() {
-        let info = parse_moov(&box_bytes(b"free", &[0u8; 4]), 0);
+        let info = parse_moov(&box_bytes(b"free", &[0u8; 4]), 0, usize::MAX);
         assert_eq!(info.dims, None);
         assert_eq!(info.duration_ms, None);
         assert_eq!(info.created, None);
@@ -1734,7 +1752,7 @@ mod tests {
         bad_trak_p.extend_from_slice(&[0u8; 4]);
         let mut moov_p = Vec::new();
         moov_p.extend_from_slice(&box_bytes(b"trak", &bad_trak_p));
-        let info = parse_moov(&moov_p, 0);
+        let info = parse_moov(&moov_p, 0, usize::MAX);
         assert_eq!(info.dims, None);
     }
 
@@ -1871,7 +1889,7 @@ mod tests {
             ("com.apple.quicktime.model", b"iPhone 15"),
             ("com.apple.quicktime.creationdate", b"2017-07-22T16:06:06+10:00"),
         ]);
-        let out = parse_qt_mdta(&meta);
+        let out = parse_qt_mdta(&meta, usize::MAX);
         let g = out.gps.expect("gps");
         assert!((g.lat_e7 - 275_916_000).abs() <= 2);
         assert_eq!(out.make.as_deref(), Some("Apple"));
@@ -1887,7 +1905,7 @@ mod tests {
         hdlr.extend_from_slice(b"vide");
         hdlr.extend_from_slice(&[0u8; 12]);
         let meta = box_bytes(b"hdlr", &hdlr);
-        let out = parse_qt_mdta(&meta);
+        let out = parse_qt_mdta(&meta, usize::MAX);
         assert!(out.gps.is_none() && out.make.is_none() && out.created.is_none());
     }
 
@@ -1913,7 +1931,7 @@ mod tests {
 
         let mut moov_p = alloc::vec::Vec::new();
         moov_p.extend_from_slice(&box_bytes(b"udta", &udta));
-        let info = parse_moov(&moov_p, 0);
+        let info = parse_moov(&moov_p, 0, usize::MAX);
         let g = info.gps.expect("gps");
         assert_eq!(g.lat_e7, 100_000_000); // ©xyz 的 10°，非 loci 的 60°
     }
@@ -1927,7 +1945,7 @@ mod tests {
         let mut moov_p = alloc::vec::Vec::new();
         moov_p.extend_from_slice(&box_bytes(b"mvhd", &mvhd_v0(2_082_844_800, 600, 600)));
         moov_p.extend_from_slice(&box_bytes(b"meta", &meta));
-        let info = parse_moov(&moov_p, 0);
+        let info = parse_moov(&moov_p, 0, usize::MAX);
         assert_eq!(info.created.map(|d| d.year), Some(2017));
         assert_eq!(info.camera_make.as_deref(), Some("Apple"));
     }
@@ -2025,7 +2043,7 @@ mod tests {
             ("com.apple.quicktime.camera.focal_length.35mm_equivalent", 22, &28u32.to_be_bytes()),
             ("com.apple.quicktime.junkbinary", 13, &[0xFF, 0xD8, 0xFF]), // JPEG 类型 → 跳过
         ]);
-        let out = parse_qt_mdta(&meta);
+        let out = parse_qt_mdta(&meta, usize::MAX);
         let find = |k: &str| out.tags.iter().find(|t| t.key == k);
         assert!(matches!(find("com.apple.quicktime.software").map(|t| &t.value),
             Some(Value::Text(s)) if s == "13.5.1"));
@@ -2056,7 +2074,7 @@ mod tests {
         let mut moov_p = alloc::vec::Vec::new();
         moov_p.extend_from_slice(&box_bytes(b"udta", &udta));
         moov_p.extend_from_slice(&box_bytes(b"meta", &meta));
-        let info = parse_moov(&moov_p, 0);
+        let info = parse_moov(&moov_p, 0, usize::MAX);
 
         let find = |src: ContainerSource, k: &str| info.container_tags.iter()
             .find(|t| t.source == src && t.key == k);
@@ -2081,5 +2099,62 @@ mod tests {
         assert!(meta_out.raw.container.iter().any(|t|
             t.key == "com.apple.quicktime.software"
             && matches!(&t.value, crate::model::Value::Text(s) if s == "13.5.1")));
+    }
+
+    // ── Finding #2: ©xyz 不得泄漏进 container_tags ──────────────────────────
+    #[test]
+    fn parse_moov_second_xyz_not_captured_into_container() {
+        use crate::model::ContainerSource;
+        // 两个 ©xyz：第一个喂 GPS，第二个不得泄漏进 container。
+        let mk_xyz = |t: &[u8]| {
+            let mut p = alloc::vec::Vec::new();
+            p.extend_from_slice(&(t.len() as u16).to_be_bytes());
+            p.extend_from_slice(&0u16.to_be_bytes());
+            p.extend_from_slice(t);
+            p
+        };
+        let mut udta = alloc::vec::Vec::new();
+        udta.extend_from_slice(&box_bytes(b"\xA9xyz", &mk_xyz(b"+10.0000+020.0000/")));
+        udta.extend_from_slice(&box_bytes(b"\xA9xyz", &mk_xyz(b"+30.0000+040.0000/")));
+        let mut moov_p = alloc::vec::Vec::new();
+        moov_p.extend_from_slice(&box_bytes(b"udta", &udta));
+        let info = parse_moov(&moov_p, 0, usize::MAX);
+        assert!(info.container_tags.iter().all(|t|
+            !(t.source == ContainerSource::Udta && t.key == "©xyz")),
+            "©xyz 不得进入 container_tags");
+    }
+
+    // ── Finding #1: source-cap tests ─────────────────────────────────────────
+    #[test]
+    fn parse_qt_mdta_caps_tags_at_budget() {
+        // 10 个文本键，预算 3 → out.tags 不超过 3。
+        let items: alloc::vec::Vec<(alloc::string::String, u32, &[u8])> = (0..10u32)
+            .map(|i| (alloc::format!("com.apple.quicktime.k{i}"), 1u32, b"v" as &[u8]))
+            .collect();
+        let refs: alloc::vec::Vec<(&str, u32, &[u8])> =
+            items.iter().map(|(k, t, v)| (k.as_str(), *t, *v)).collect();
+        let meta = qt_meta_with_typed_keys(&refs);
+        let out = parse_qt_mdta(&meta, 3);
+        assert!(out.tags.len() <= 3, "源头封顶：out.tags={} 应 ≤ 3", out.tags.len());
+    }
+
+    #[test]
+    fn parse_moov_caps_container_tags_at_budget() {
+        // udta 多个 ©-atom + mdta 多个键，预算很小 → 峰值受限。
+        let mk = |t: &[u8]| {
+            let mut p = alloc::vec::Vec::new();
+            p.extend_from_slice(&(t.len() as u16).to_be_bytes());
+            p.extend_from_slice(&0u16.to_be_bytes());
+            p.extend_from_slice(t);
+            p
+        };
+        let mut udta = alloc::vec::Vec::new();
+        for fourcc in [b"\xA9nam", b"\xA9cmt", b"\xA9day", b"\xA9too"] {
+            udta.extend_from_slice(&box_bytes(fourcc, &mk(b"x")));
+        }
+        let mut moov_p = alloc::vec::Vec::new();
+        moov_p.extend_from_slice(&box_bytes(b"udta", &udta));
+        let info = parse_moov(&moov_p, 0, 2);
+        assert!(info.container_tags.len() <= 2, "udta 源头封顶 ≤ 2，实际 {}", info.container_tags.len());
     }
 }

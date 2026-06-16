@@ -76,7 +76,7 @@ impl PushParser {
 
     /// 用已探测格式建驱动；不可识别则置 failed。
     fn start_driver(&mut self, fmt: FileFormat) -> Result<Outcome, Error> {
-        match parser_for(fmt.clone()) {
+        match parser_for(fmt.clone(), self.limits_opts.limits) {
             Some(parser) => {
                 self.format = fmt;
                 let mut d = StreamDriver::new(parser, self.limits_opts.limits);
