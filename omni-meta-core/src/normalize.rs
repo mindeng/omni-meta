@@ -44,28 +44,30 @@ const GPS_ALT: u16 = 0x0006;
 
 /// 把 Value（List 多有理数，或单个 Rational）取前 3 个有理数合成度（d + m/60 + s/3600）。
 fn dms_value_to_deg(v: &Value) -> Option<f64> {
-    let rats: Vec<(u32, u32)> = match v {
-        Value::List(items) => items
-            .iter()
-            .take(3)
-            .filter_map(|x| if let Value::Rational(n, d) = x { Some((*n, *d)) } else { None })
-            .collect(),
-        Value::Rational(n, d) => Vec::from([(*n, *d)]),
-        _ => return None,
-    };
-    if rats.is_empty() {
-        return None;
-    }
     let mut deg = 0.0f64;
     let mut scale = 1.0f64;
-    for (n, d) in rats {
-        if d == 0 {
-            return None;
-        }
+    let mut any = false;
+    let mut acc = |n: u32, d: u32| -> Option<()> {
+        if d == 0 { return None; }
         deg += (n as f64 / d as f64) / scale;
         scale *= 60.0;
+        any = true;
+        Some(())
+    };
+    match v {
+        Value::List(items) => {
+            for x in items.iter().take(3) {
+                if let Value::Rational(n, d) = x {
+                    acc(*n, *d)?;
+                }
+            }
+        }
+        Value::Rational(n, d) => {
+            acc(*n, *d)?;
+        }
+        _ => return None,
     }
-    Some(deg)
+    if any { Some(deg) } else { None }
 }
 
 /// 解析无符号十进制 "D" 或 "D.DDDD" → 值 × 10^scale_pow10（截断多余小数位）。i64 防溢出。
@@ -118,7 +120,11 @@ fn parse_scaled_decimal(s: &str, scale_pow10: u32) -> Option<i64> {
     Some(if neg { -acc } else { acc })
 }
 
-/// 解析 XMP exif:GPSLatitude/Longitude "DDD,MM.mmm[NSEW]" 或 "DDD,MM,SS[NSEW]" → E7。
+/// 解析 XMP exif:GPSLatitude/Longitude 坐标字符串 → E7。
+/// 支持三种形式（末尾方位字母 N/S/E/W 可选）：
+/// * `"DDD.ddd[NSEW]"` — 裸十进制度数（无逗号）
+/// * `"DDD,MM.mmm[NSEW]"` — 度分十进制形式
+/// * `"DDD,MM,SS[NSEW]"` — 度分秒形式
 fn parse_xmp_coord(s: &str) -> Option<i32> {
     let s = s.trim();
     if s.is_empty() {
@@ -127,12 +133,15 @@ fn parse_xmp_coord(s: &str) -> Option<i32> {
     let last = s.as_bytes()[s.len() - 1];
     let neg = matches!(last, b'S' | b'W' | b's' | b'w');
     let core = if last.is_ascii_alphabetic() { &s[..s.len() - 1] } else { s };
+    let has_comma = core.as_bytes().contains(&b',');
     let mut parts = core.split(',');
-    let deg: i64 = {
-        let d = parts.next()?;
-        parse_scaled_decimal(d, 0)?
+    let first = parts.next()?;
+    let mut e7: i64 = if has_comma {
+        parse_scaled_decimal(first, 0)?.checked_mul(10_000_000)?
+    } else {
+        // 裸十进制度数 "DDD.ddd"：整体按 E7 解析（避免丢弃小数 → 臆造错误坐标）。
+        parse_scaled_decimal(first, 7)?
     };
-    let mut e7: i64 = deg.checked_mul(10_000_000)?;
     if let Some(min_str) = parts.next() {
         let min_e7 = parse_scaled_decimal(min_str, 7)?;
         e7 = e7.checked_add(min_e7 / 60)?;
@@ -732,5 +741,37 @@ mod tests {
         let mut w = Vec::new();
         let g = normalize(&raw, &mut w).gps.expect("gps");
         assert_eq!(g.lat_e7, 100_000_000); // EXIF 的 10°，非 XMP 的 39°
+    }
+
+    #[test]
+    fn gps_from_xmp_decimal_degrees_form() {
+        // 裸十进制度数（无逗号）"39.9515N" / "116.3900E"
+        let raw = RawTags {
+            exif: Vec::new(),
+            xmp: Vec::from([
+                xmp_p("exif", "GPSLatitude", "39.9515N"),
+                xmp_p("exif", "GPSLongitude", "116.3900E"),
+            ]),
+        };
+        let mut w = Vec::new();
+        let g = normalize(&raw, &mut w).gps.expect("gps");
+        assert_eq!(g.lat_e7, 399_515_000);
+        assert_eq!(g.lon_e7, 1_163_900_000);
+    }
+
+    #[test]
+    fn gps_from_xmp_comma_form_still_works() {
+        // 回归：逗号形式不变
+        let raw = RawTags {
+            exif: Vec::new(),
+            xmp: Vec::from([
+                xmp_p("exif", "GPSLatitude", "39,57.0900N"),
+                xmp_p("exif", "GPSLongitude", "116,23.4000E"),
+            ]),
+        };
+        let mut w = Vec::new();
+        let g = normalize(&raw, &mut w).gps.expect("gps");
+        assert!((g.lat_e7 - 399_515_000).abs() <= 2);
+        assert!((g.lon_e7 - 1_163_900_000).abs() <= 2);
     }
 }
