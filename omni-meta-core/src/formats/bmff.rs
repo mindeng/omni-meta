@@ -748,6 +748,18 @@ fn scaled_decimal_i64(s: &str, scale_pow10: u32) -> Option<i64> {
     Some(if neg { -acc } else { acc })
 }
 
+/// 解析 `©xyz` 载荷：u16 size + u16 lang + ISO6709 文本。越界/非 UTF-8 → None。
+/// 部分写入方 size 字段不可靠，取 size 失败时回退到「偏移 4 之后全部」。
+fn parse_xyz(payload: &[u8]) -> Option<Gps> {
+    if payload.len() < 4 {
+        return None;
+    }
+    let size = u16::from_be_bytes([payload[0], payload[1]]) as usize;
+    let text_bytes = payload.get(4..4 + size).or_else(|| payload.get(4..))?;
+    let text = core::str::from_utf8(text_bytes).ok()?;
+    parse_iso6709(text)
+}
+
 /// 解析 ISO 6709 串（©xyz / mdta location.ISO6709）→ Gps。
 /// 形如 "+27.5916+086.5640+8850/"：按 +/- 切有符号十进制段 → ①纬 ②经 ③可选高(米)。
 fn parse_iso6709(s: &str) -> Option<Gps> {
@@ -1451,5 +1463,24 @@ mod tests {
         assert_eq!(parse_iso6709("+27.5916"), None); // 缺经度
         assert_eq!(parse_iso6709(""), None);
         assert_eq!(parse_iso6709("foo+1.0+2.0"), None); // 前缀垃圾必须拒绝
+    }
+
+    #[test]
+    fn parse_xyz_atom_yields_gps() {
+        // ©xyz payload: u16 size + u16 lang + ISO6709 文本
+        let text = b"+27.5916+086.5640/";
+        let mut payload = alloc::vec::Vec::new();
+        payload.extend_from_slice(&(text.len() as u16).to_be_bytes());
+        payload.extend_from_slice(&0x15c7u16.to_be_bytes()); // 任意 lang
+        payload.extend_from_slice(text);
+        let g = parse_xyz(&payload).expect("gps");
+        assert!((g.lat_e7 - 275_916_000).abs() <= 2);
+        assert!((g.lon_e7 - 865_640_000).abs() <= 2);
+    }
+
+    #[test]
+    fn parse_xyz_truncated_is_none() {
+        assert_eq!(parse_xyz(&[0u8, 5]), None); // 不足 size+lang
+        assert_eq!(parse_xyz(&[]), None);
     }
 }
