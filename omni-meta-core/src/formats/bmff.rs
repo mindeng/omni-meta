@@ -945,7 +945,7 @@ fn parse_qt_mdta(meta_payload: &[u8]) -> QtMdta {
             continue;
         }
         let key = &keys[idx as usize - 1];
-        let Some(value) = qt_data_value(item_payload) else { continue };
+        let Some((_type_code, value)) = qt_data_typed(item_payload) else { continue };
         match key.as_str() {
             "com.apple.quicktime.location.ISO6709" => {
                 if out.gps.is_none()
@@ -1018,11 +1018,14 @@ fn parse_qt_keys(payload: &[u8]) -> alloc::vec::Vec<alloc::string::String> {
     out
 }
 
-/// 从 ilst item 载荷取内层 `data` atom 的值（type(4)+locale(4) 之后的字节）。
-fn qt_data_value(item_payload: &[u8]) -> Option<&[u8]> {
+/// 从 ilst item 载荷取内层 `data` atom 的 (类型码, 值)。
+/// data 载荷布局：type(4) + locale(4) + value。越界 → None。
+fn qt_data_typed(item_payload: &[u8]) -> Option<(u32, &[u8])> {
     for (hdr, p) in iter_child_boxes(item_payload) {
         if &hdr.kind == b"data" {
-            return p.get(8..); // 跳过 type(4)+locale(4)
+            let type_code = u32::from_be_bytes(p.get(0..4)?.try_into().ok()?);
+            let value = p.get(8..)?;
+            return Some((type_code, value));
         }
     }
     None
@@ -1885,5 +1888,18 @@ mod tests {
         assert_eq!(meta_out.unified.gps.map(|g| g.lat_e7), Some(350_000_000));
         assert_eq!(meta_out.unified.camera_make.as_deref(), Some("Apple"));
         assert_eq!(meta_out.unified.camera_model.as_deref(), Some("iPhone 15"));
+    }
+
+    #[test]
+    fn qt_data_typed_returns_type_and_value() {
+        // data atom: type(4)=1(UTF-8) + locale(4) + "hi"
+        let mut data = alloc::vec::Vec::new();
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(b"hi");
+        let item = box_bytes(b"data", &data);
+        let (ty, val) = qt_data_typed(&item).expect("data");
+        assert_eq!(ty, 1);
+        assert_eq!(val, b"hi");
     }
 }
