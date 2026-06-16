@@ -14,6 +14,8 @@ pub enum FileFormat {
     Avif,
     Mp4,
     Mov,
+    Mkv,
+    Webm,
     Unknown,
 }
 
@@ -248,5 +250,11 @@ mod tests {
         let u = Unified::default();
         assert_eq!(u.duration_ms, None);
         assert_eq!(u.created, None);
+    }
+
+    #[test]
+    fn fileformat_has_ebml_family() {
+        assert_ne!(FileFormat::Mkv, FileFormat::Webm);
+        assert_ne!(FileFormat::Mkv, FileFormat::Unknown);
     }
 }
