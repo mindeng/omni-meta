@@ -1,6 +1,6 @@
 # omni-meta Roadmap
 
-**活文档** · 最近更新 2026-06-15（A1+A2+A3 完成）· 维护者随进度勾选
+**活文档** · 最近更新 2026-06-16（A1+A2+A3+C 完成）· 维护者随进度勾选
 基准设计：[`docs/superpowers/specs/2026-06-14-omni-meta-design.md`](superpowers/specs/2026-06-14-omni-meta-design.md)
 
 > 本文档替代原设计 §11 的线性 phase 表——实际推进中适配器被提前完成、各纵切片
@@ -40,11 +40,11 @@
 > A3 起新增 `created`（BMFF moov 1904 UTC + EXIF DateTimeOriginal/DateTime，≥2 来源满足；`DateTimeParts`
 > 带可选时区：moov=`Some(0)` UTC，EXIF 无 OffsetTime 时 `None`）与 `duration_ms`（BMFF moov，毫秒；
 > 第二来源待 EBML 里程碑 C 补齐）。
+> C 起 `duration_ms` 增 EBML（MKV/WebM `Info > Duration × TimestampScale`）第二来源；`created` 增 EBML `DateUTC`（2001 UTC）第三来源。`width`/`height` 增 EBML `Video PixelWidth/Height`（第 6 来源）。
 
 ### 尚未开始 ⬜
 
-IPTC codec · ICC 摘要 · EBML 容器（MKV/WebM，复用 `duration_ms`/`created`，补 `duration_ms` 第二来源） ·
-TIFF 顶层格式 · async/tokio 适配器 · Stripper（剥离）· GPS 等 Unified 字段扩展 · `cargo-fuzz`（横切，各容器/codec）
+IPTC codec · ICC 摘要 · TIFF 顶层格式 · async/tokio 适配器 · Stripper（剥离）· GPS 等 Unified 字段扩展 · `cargo-fuzz`（横切，各容器/codec）
 
 ---
 
@@ -109,11 +109,13 @@ TIFF 顶层格式 · async/tokio 适配器 · Stripper（剥离）· GPS 等 Uni
 - [ ] （可选）**TIFF 顶层格式** + tag `0x83BB` → 给 IIM 第二来源，可把 caption/credit 投影进 Unified
 - [ ] 四适配器差分
 
-### 里程碑 C — EBML 容器（MKV/WebM）
+### 里程碑 C — EBML 容器（MKV/WebM）✅ 完成 — 设计 `specs/2026-06-16-omni-meta-ebml-design.md` / 计划 `plans/2026-06-16-omni-meta-ebml.md`
 
-- [ ] `containers/ebml.rs`：变长整数 + 元素树显式栈迭代
-- [ ] `SeekHead` → Info（时长/维度）/ Tags
-- [ ] 复用里程碑 A 引入的 `duration`/`created` Unified 字段
+- [x] `containers/ebml.rs`：vint 元素 ID/size（保留/剥离标记位、未知大小）+ 元素头/子元素显式迭代 + 大端 uint/int/float
+- [x] `formats/ebml.rs`：前向走盒（跳 EBML 头/下钻 Segment 不缓冲/缓冲 Info·Tracks/遇未知大小媒体即停）
+- [x] `Info`→`duration_ms`（Duration×TimestampScale，隔离 f64 守卫）/`created`（DateUTC 2001 UTC）；`Tracks`→`width`/`height`（首个视频轨 PixelWidth/Height）
+- [x] `probe` 经 `DocType` 区分 `FileFormat::Mkv`/`Webm`（PROBE_MAX→64）；复用里程碑 A 的 `duration_ms`/`created`
+- [x] 四适配器差分（WebM/MKV，含大 Void seek + 未知大小 Segment）+ 合成畸形单测（截断/未知大小/越界永不 panic）
 
 ### 里程碑 D — async 适配器（feature = `tokio`）
 
@@ -135,7 +137,7 @@ TIFF 顶层格式 · async/tokio 适配器 · Stripper（剥离）· GPS 等 Uni
 
 ## 4. 横切待办（贯穿各里程碑）
 
-- [ ] **Unified 受控增长**：`created`（A3 已纳入，BMFF+EXIF）/ `duration_ms`（A3 纳入，单来源 BMFF，待 EBML 补 ≥2）/ `gps` / `video_codec` / `audio_codec` 等随来源达到 ≥2 时纳入
+- [ ] **Unified 受控增长**：`created`（BMFF+EXIF）/ `duration_ms`（BMFF+EBML，**C 起达 ≥2 来源**）/ `gps`（EXIF GPS IFD + XMP，raw 已就绪，待 normalize 投影）/ `video_codec` / `audio_codec` 等随来源达到 ≥2 时纳入
 - [ ] **`Value` 枚举**：按需补 `U64`/`I64` 等（当前为 v1 子集）
 - [ ] **fuzz**：每个新容器/codec 接 `cargo-fuzz`，断言永不 panic / 不超 `Limits` / 不死循环
 - [ ] **no_std CI**：每个里程碑验证 `--no-default-features`
