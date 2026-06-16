@@ -328,6 +328,73 @@ fn parse_exif_datetime(s: &str) -> Option<DateTimeParts> {
     })
 }
 
+/// 解析 ISO 8601 "YYYY-MM-DDThh:mm:ss[Z|±hh:mm]" → DateTimeParts。
+/// 严格定长定分隔；Z→Some(0)，±hh:mm→分钟，无后缀→None；越界→None（不臆造）。
+pub(crate) fn parse_iso8601(s: &str) -> Option<DateTimeParts> {
+    let b = s.as_bytes();
+    if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T'
+        || b[13] != b':' || b[16] != b':'
+    {
+        return None;
+    }
+    let num = |r: core::ops::Range<usize>| -> Option<u32> {
+        let mut v = 0u32;
+        for &c in &b[r] {
+            if !c.is_ascii_digit() {
+                return None;
+            }
+            v = v * 10 + u32::from(c - b'0');
+        }
+        Some(v)
+    };
+    let year = num(0..4)?;
+    let month = num(5..7)?;
+    let day = num(8..10)?;
+    let hour = num(11..13)?;
+    let minute = num(14..16)?;
+    let second = num(17..19)?;
+    if year == 0 || !(1..=12).contains(&month) || !(1..=31).contains(&day)
+        || hour > 23 || minute > 59 || second > 60
+    {
+        return None;
+    }
+    let two = |i: usize| -> Option<i16> {
+        let (h, l) = (b[i], b[i + 1]);
+        if !h.is_ascii_digit() || !l.is_ascii_digit() {
+            return None;
+        }
+        Some(i16::from((h - b'0') * 10 + (l - b'0')))
+    };
+    let tz = match b.get(19) {
+        None => None,
+        Some(b'Z') if b.len() == 20 => Some(0i16),
+        Some(c @ (b'+' | b'-')) if b.len() == 25 && b[22] == b':' => {
+            let hh = two(20)?;
+            let mm = two(23)?;
+            if hh > 23 || mm > 59 {
+                return None;
+            }
+            let mag = hh * 60 + mm;
+            Some(if *c == b'-' { -mag } else { mag })
+        }
+        Some(c @ (b'+' | b'-')) if b.len() == 24 => {
+            let hh = two(20)?;
+            let mm = two(22)?;
+            if hh > 23 || mm > 59 {
+                return None;
+            }
+            let mag = hh * 60 + mm;
+            Some(if *c == b'-' { -mag } else { mag })
+        }
+        _ => return None,
+    };
+    Some(DateTimeParts {
+        year: year as u16, month: month as u8, day: day as u8,
+        hour: hour as u8, minute: minute as u8, second: second as u8,
+        tz_offset_min: tz,
+    })
+}
+
 /// 解析 EXIF OffsetTime "±HH:MM" → 分钟偏移。格式不符 → None。
 fn parse_exif_offset(s: &str) -> Option<i16> {
     let b = s.as_bytes();
@@ -614,6 +681,36 @@ mod tests {
         let g = normalize(&raw, &mut w).gps.expect("gps");
         assert!((g.lat_e7 - 399_515_000).abs() <= 2, "lat_e7={}", g.lat_e7);
         assert!((g.lon_e7 - 1_163_900_000).abs() <= 2, "lon_e7={}", g.lon_e7);
+    }
+
+    #[test]
+    fn iso8601_with_offset_and_z_and_naive() {
+        let a = super::parse_iso8601("2017-07-22T16:06:06+10:00").unwrap();
+        assert_eq!((a.year, a.month, a.day, a.hour, a.minute, a.second), (2017, 7, 22, 16, 6, 6));
+        assert_eq!(a.tz_offset_min, Some(600));
+        let z = super::parse_iso8601("2020-01-02T03:04:05Z").unwrap();
+        assert_eq!(z.tz_offset_min, Some(0));
+        let naive = super::parse_iso8601("2020-01-02T03:04:05").unwrap();
+        assert_eq!(naive.tz_offset_min, None);
+    }
+
+    #[test]
+    fn iso8601_malformed_is_none() {
+        for bad in ["", "2020-13-02T03:04:05Z", "2020-01-02 03:04:05", "not-a-date", "2020-01-02T25:00:00Z", "2020-01-02T03:04:05Z ", "2020-01-02T03:04:05+10"] {
+            assert_eq!(super::parse_iso8601(bad), None, "input {bad:?}");
+        }
+    }
+
+    #[test]
+    fn iso8601_offset_without_colon() {
+        // Apple iPhone .MOV creationdate form: 无冒号偏移
+        let a = super::parse_iso8601("2017-07-22T16:06:06+1000").unwrap();
+        assert_eq!((a.year, a.month, a.day, a.hour, a.minute, a.second), (2017, 7, 22, 16, 6, 6));
+        assert_eq!(a.tz_offset_min, Some(600));
+        let neg = super::parse_iso8601("2020-01-02T03:04:05-0530").unwrap();
+        assert_eq!(neg.tz_offset_min, Some(-330));
+        // 仍拒绝畸形：长度不符
+        assert_eq!(super::parse_iso8601("2020-01-02T03:04:05+10:0"), None);
     }
 
     #[test]
