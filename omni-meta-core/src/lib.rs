@@ -9,6 +9,7 @@ pub(crate) mod adapters;
 pub(crate) mod codecs;
 pub(crate) mod containers;
 pub(crate) mod formats;
+pub(crate) mod civil;
 pub(crate) mod cursor;
 pub(crate) mod demand;
 pub(crate) mod error;
