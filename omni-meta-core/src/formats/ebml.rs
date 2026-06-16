@@ -30,7 +30,7 @@ fn datetime_from_matroska_epoch(date_ns: i64) -> DateTimeParts {
 // EBML / Matroska 元素 ID（保留标记位的规范值）。
 const SEGMENT: u32 = 0x1853_8067;
 const INFO: u32 = 0x1549_A966;
-const TIMESTAMP_SCALE: u32 = 0x2AD7_B1; // 旧名 TimecodeScale，同 ID
+const TIMESTAMP_SCALE: u32 = 0x2AD7B1; // 旧名 TimecodeScale，同 ID
 const DURATION: u32 = 0x4489;
 const DATE_UTC: u32 = 0x4461;
 const TRACKS: u32 = 0x1654_AE6B;
@@ -359,7 +359,7 @@ mod tests {
         let tod = datetime_from_matroska_epoch(3_661 * 1_000_000_000);
         assert_eq!((tod.hour, tod.minute, tod.second), (1, 1, 1));
         // 负值（2000-12-31）
-        let neg = datetime_from_matroska_epoch(-1 * 1_000_000_000);
+        let neg = datetime_from_matroska_epoch(-1_000_000_000);
         assert_eq!((neg.year, neg.month, neg.day), (2000, 12, 31));
     }
 
