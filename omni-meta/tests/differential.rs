@@ -1017,3 +1017,11 @@ fn fixture_bmff_mp4_container_tags() -> Vec<u8> {
 fn differential_bmff_mp4_container_tags() {
     assert_all_equal(&fixture_bmff_mp4_container_tags());
 }
+
+#[test]
+fn mov_container_projects_software_and_creator() {
+    let bytes = fixture_bmff_mp4_container_tags();
+    let m = read_slice(&bytes, Options::default()).expect("metadata");
+    assert_eq!(m.unified.software.as_deref(), Some("13.5.1"));
+    assert_eq!(m.unified.creator.as_deref(), Some("Jane"));
+}

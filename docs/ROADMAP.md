@@ -31,10 +31,11 @@
 | **格式：MP4/MOV (A3)** | `moov` 整盒入窗解析：`mvhd`→`duration_ms`（duration/timescale→ms，u128 防溢出）/`created`（1904 UTC 秒→`DateTimeParts`），逐 `trak`/`tkhd`→维度（16.16 定点取整，首个非零轨胜出）；`created` 增 EXIF 第二来源（DateTimeOriginal/DateTime + OffsetTime 解析）；`timescale=0`/溢出/`creation=0`/截断/嵌套越界均警告或干净缺失、不 panic | `58b5e06`…`eec7f44` |
 | **适配器（4 条）** | `read_slice` / `push` / `read_blocking` / `read_seek` | — |
 | 测试基座 | 四适配器差分一致性（含完整 HEIC meta+mdat 的 SeekTo 抽取）+ 各 codec/格式单测 | `535fb90` `d4f5b42` `d4dccd4` |
+| **QuickTime 容器标签** | `RawTags.container`（mdta 文本键 / udta `©`-atoms / focal length）+ `software`/`creator` 投影（容器>EXIF>XMP，≥2 来源） | 本次分支 |
 
 ### 当前 Unified 字段
 
-`width` · `height` · `orientation` · `camera_make` · `camera_model` · `duration_ms` · `created` · `gps`（均 `Option`）
+`width` · `height` · `orientation` · `camera_make` · `camera_model` · `duration_ms` · `created` · `gps` · `software` · `creator`（均 `Option`）
 > 受控增长原则：每个新字段需 **≥2 种格式来源**才纳入。
 > A2 起 `width`/`height` 增 HEIF/AVIF `ispe` 来源（第 5 个格式来源）。
 > A3 起新增 `created`（BMFF moov 1904 UTC + EXIF DateTimeOriginal/DateTime，≥2 来源满足；`DateTimeParts`
@@ -43,6 +44,7 @@
 > C 起 `duration_ms` 增 EBML（MKV/WebM `Info > Duration × TimestampScale`）第二来源；`created` 增 EBML `DateUTC`（2001 UTC）第三来源。`width`/`height` 增 EBML `Video PixelWidth/Height`（第 6 来源）。
 > GPS 里程碑起新增 `gps`（`Gps { lat_e7, lon_e7, alt_mm }`，E7/mm 整数表示），来源：EXIF GPS IFD（d/m/s 有理数）+ XMP `exif:GPS*` 回退 + 视频 udta `©xyz`/`loci` + QuickTime moov/meta mdta `location.ISO6709`，≥3 来源满足。
 > `camera_make`/`camera_model` 增 QuickTime mdta（首次覆盖视频来源）。`created` 增 QuickTime mdta `creationdate`（ISO 8601 带时区，优先于 mvhd 1904 UTC）。
+> QuickTime 容器标签里程碑起新增 `software`（EXIF 0x0131 + XMP `xmp:CreatorTool` + 容器 mdta software / udta `©swr`，≥2 来源）与 `creator`（EXIF 0x013B Artist + XMP `dc:creator` + 容器 mdta author / udta `©aut`，≥2 来源），优先级容器>EXIF>XMP；并在 raw 层新增 `RawTags.container`（QuickTime mdta 文本键 + udta `©`-atoms + focal length 35mm；二进制 covr 留待可选 Phase 3）。
 
 ### 尚未开始 ⬜
 
