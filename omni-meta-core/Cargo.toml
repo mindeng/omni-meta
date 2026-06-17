@@ -10,5 +10,7 @@ path = "src/lib.rs"
 [features]
 default = ["std"]
 std = []
+# 内部模糊专用：暴露解析器入口的薄包装。非 semver 稳定面，不进 default，不进文档。
+__fuzzing = []
 
 [dependencies]
