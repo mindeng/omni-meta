@@ -1,7 +1,7 @@
 //! 差分测试：read_slice / read_blocking / read_seek / push 对同一输入逐字段一致。
 
+use omni_meta::{Options, read_slice};
 use omni_meta_fixtures::*;
-use omni_meta::{read_slice, Options};
 
 #[test]
 fn differential_plain() {

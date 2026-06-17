@@ -1,6 +1,6 @@
 //! blocking / seek 适配器端到端 + 与 read_slice 一致。
 
-use omni_meta::{read_blocking, read_seek, read_slice, Options, Orientation};
+use omni_meta::{Options, Orientation, read_blocking, read_seek, read_slice};
 use std::io::Cursor;
 
 fn make_tiff() -> Vec<u8> {

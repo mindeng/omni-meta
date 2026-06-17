@@ -51,7 +51,11 @@ pub struct ElemHeader {
 pub fn read_element_header(input: &[u8]) -> Option<ElemHeader> {
     let (id, idlen) = read_elem_id(input)?;
     let (size, szlen) = read_elem_size(input.get(idlen..)?)?;
-    Some(ElemHeader { id, header_len: (idlen + szlen) as u64, size })
+    Some(ElemHeader {
+        id,
+        header_len: (idlen + szlen) as u64,
+        size,
+    })
 }
 
 /// 在已见引导字节后，精确计算读出完整元素头所需字节数（供增量索取）。
@@ -94,7 +98,9 @@ pub fn read_float(b: &[u8]) -> Option<f64> {
     match b.len() {
         0 => Some(0.0),
         4 => Some(f64::from(f32::from_be_bytes([b[0], b[1], b[2], b[3]]))),
-        8 => Some(f64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])),
+        8 => Some(f64::from_be_bytes([
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+        ])),
         _ => None,
     }
 }
@@ -133,10 +139,13 @@ mod tests {
 
     #[test]
     fn elem_id_widths() {
-        assert_eq!(read_elem_id(&[0xB0]), Some((0xB0, 1)));            // PixelWidth
-        assert_eq!(read_elem_id(&[0x42, 0x82]), Some((0x4282, 2)));   // DocType
+        assert_eq!(read_elem_id(&[0xB0]), Some((0xB0, 1))); // PixelWidth
+        assert_eq!(read_elem_id(&[0x42, 0x82]), Some((0x4282, 2))); // DocType
         assert_eq!(read_elem_id(&[0x2A, 0xD7, 0xB1]), Some((0x2AD7B1, 3))); // TimestampScale
-        assert_eq!(read_elem_id(&[0x1A, 0x45, 0xDF, 0xA3]), Some((0x1A45DFA3, 4))); // EBML
+        assert_eq!(
+            read_elem_id(&[0x1A, 0x45, 0xDF, 0xA3]),
+            Some((0x1A45DFA3, 4))
+        ); // EBML
         assert_eq!(read_elem_id(&[0x00]), None); // 长度 > 8 非法
         assert_eq!(read_elem_id(&[0x08, 0, 0, 0, 0]), None); // 长度 5 > 4 上限
         assert_eq!(read_elem_id(&[]), None);
@@ -151,9 +160,15 @@ mod tests {
         // 单字节未知大小：0xFF（数据位全 1）→ None size
         assert_eq!(read_elem_size(&[0xFF]), Some((None, 1)));
         // 八字节未知大小：0x01 + 7×0xFF → None size
-        assert_eq!(read_elem_size(&[0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]), Some((None, 8)));
+        assert_eq!(
+            read_elem_size(&[0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
+            Some((None, 8))
+        );
         // 八字节定长：0x01 + 7 字节 = 256
-        assert_eq!(read_elem_size(&[0x01, 0, 0, 0, 0, 0, 1, 0]), Some((Some(256), 8)));
+        assert_eq!(
+            read_elem_size(&[0x01, 0, 0, 0, 0, 0, 1, 0]),
+            Some((Some(256), 8))
+        );
         // 截断：声明 2 字节但只给 1
         assert_eq!(read_elem_size(&[0x40]), None);
         assert_eq!(read_elem_size(&[0x00]), None); // 长度 > 8
@@ -184,8 +199,9 @@ mod tests {
         let mut buf = alloc::vec::Vec::new();
         buf.extend_from_slice(&elem(&[0xB0], &[0, 0, 5, 0])); // 子元素 A
         buf.extend_from_slice(&elem(&[0xBA], &[0, 0, 2, 0])); // 子元素 B
-        let got: alloc::vec::Vec<(u32, usize)> =
-            iter_child_elements(&buf).map(|(h, p)| (h.id, p.len())).collect();
+        let got: alloc::vec::Vec<(u32, usize)> = iter_child_elements(&buf)
+            .map(|(h, p)| (h.id, p.len()))
+            .collect();
         assert_eq!(got, alloc::vec![(0xB0u32, 4usize), (0xBA, 4)]);
 
         // 声明长度越界 → 停止，不产出残缺项
@@ -199,7 +215,7 @@ mod tests {
     fn be_readers() {
         assert_eq!(read_uint(&[0x01, 0x00]), 256);
         assert_eq!(read_uint(&[]), 0);
-        assert_eq!(read_int(&[0xFF]), -1);        // 符号扩展
+        assert_eq!(read_int(&[0xFF]), -1); // 符号扩展
         assert_eq!(read_int(&[0x00, 0x05]), 5);
         assert_eq!(read_int(&[]), 0);
         assert_eq!(read_float(&[]), Some(0.0));

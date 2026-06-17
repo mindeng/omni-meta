@@ -23,7 +23,10 @@ pub struct GifParser {
 
 impl Default for GifParser {
     fn default() -> Self {
-        Self { state: State::Header, done: false }
+        Self {
+            state: State::Header,
+            done: false,
+        }
     }
 }
 
@@ -37,18 +40,30 @@ impl MetaParser for GifParser {
     fn pull<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
         let mut events: Vec<Event<'a>> = Vec::new();
         if self.done {
-            return PullResult { demand: Demand::Done, consumed: 0, events };
+            return PullResult {
+                demand: Demand::Done,
+                consumed: 0,
+                events,
+            };
         }
         let mut pos = 0usize;
 
         if self.state == State::Header {
             if input.len() < 13 {
-                return PullResult { demand: Demand::NeedBytes(13), consumed: 0, events };
+                return PullResult {
+                    demand: Demand::NeedBytes(13),
+                    consumed: 0,
+                    events,
+                };
             }
             let sig = &input[0..6];
             if sig != b"GIF87a" && sig != b"GIF89a" {
                 self.done = true;
-                return PullResult { demand: Demand::Done, consumed: 0, events };
+                return PullResult {
+                    demand: Demand::Done,
+                    consumed: 0,
+                    events,
+                };
             }
             let w = u16::from_le_bytes([input[6], input[7]]) as u32;
             let h = u16::from_le_bytes([input[8], input[9]]) as u32;
@@ -60,7 +75,11 @@ impl MetaParser for GifParser {
             if packed & 0x80 != 0 {
                 // 跳过 Global Color Table：3 * 2^((packed&7)+1)
                 let gct = 3usize * (1usize << ((packed & 0x07) + 1));
-                return PullResult { demand: Demand::Skip(gct as u64), consumed: pos, events };
+                return PullResult {
+                    demand: Demand::Skip(gct as u64),
+                    consumed: pos,
+                    events,
+                };
             }
         }
 
@@ -77,7 +96,10 @@ impl MetaParser for GifParser {
                             let magic = find_magic(&rest[..zero]);
                             let pkt_end = magic.unwrap_or(zero);
                             let packet = &rest[..pkt_end];
-                            events.push(Event::Payload { kind: PayloadKind::Xmp, data: packet });
+                            events.push(Event::Payload {
+                                kind: PayloadKind::Xmp,
+                                data: packet,
+                            });
                             // 消费到 0x00 终止符（含），回到 Block 状态
                             self.state = State::Block;
                             pos += zero + 1;
@@ -96,7 +118,11 @@ impl MetaParser for GifParser {
                 State::SubBlocks => {
                     let rest = &input[pos..];
                     if rest.is_empty() {
-                        return PullResult { demand: Demand::NeedBytes(1), consumed: pos, events };
+                        return PullResult {
+                            demand: Demand::NeedBytes(1),
+                            consumed: pos,
+                            events,
+                        };
                     }
                     let len = rest[0] as usize;
                     if len == 0 {
@@ -115,18 +141,30 @@ impl MetaParser for GifParser {
                 State::Block => {
                     let rest = &input[pos..];
                     if rest.is_empty() {
-                        return PullResult { demand: Demand::NeedBytes(1), consumed: pos, events };
+                        return PullResult {
+                            demand: Demand::NeedBytes(1),
+                            consumed: pos,
+                            events,
+                        };
                     }
                     match rest[0] {
                         0x3B => {
                             // Trailer
                             self.done = true;
-                            return PullResult { demand: Demand::Done, consumed: pos + 1, events };
+                            return PullResult {
+                                demand: Demand::Done,
+                                consumed: pos + 1,
+                                events,
+                            };
                         }
                         0x2C => {
                             // 图像描述符：需 10 字节(1 引导 + 9 描述符)读 packed
                             if rest.len() < 10 {
-                                return PullResult { demand: Demand::NeedBytes(10), consumed: pos, events };
+                                return PullResult {
+                                    demand: Demand::NeedBytes(10),
+                                    consumed: pos,
+                                    events,
+                                };
                             }
                             let packed = rest[9];
                             let lct = if packed & 0x80 != 0 {
@@ -137,18 +175,30 @@ impl MetaParser for GifParser {
                             // 消费 10 字节描述符；跳过 LCT + 1 字节 LZW 最小码长；转 SubBlocks
                             self.state = State::SubBlocks;
                             let skip = (lct as u64) + 1;
-                            return PullResult { demand: Demand::Skip(skip), consumed: pos + 10, events };
+                            return PullResult {
+                                demand: Demand::Skip(skip),
+                                consumed: pos + 10,
+                                events,
+                            };
                         }
                         0x21 => {
                             // 扩展：需第 2 字节 label
                             if rest.len() < 2 {
-                                return PullResult { demand: Demand::NeedBytes(2), consumed: pos, events };
+                                return PullResult {
+                                    demand: Demand::NeedBytes(2),
+                                    consumed: pos,
+                                    events,
+                                };
                             }
                             let label = rest[1];
                             if label == 0xFF {
                                 // Application Extension：需 block size 字节 + 11 字节 id
                                 if rest.len() < 3 + 11 {
-                                    return PullResult { demand: Demand::NeedBytes(3 + 11), consumed: pos, events };
+                                    return PullResult {
+                                        demand: Demand::NeedBytes(3 + 11),
+                                        consumed: pos,
+                                        events,
+                                    };
                                 }
                                 let id = &rest[3..3 + 11];
                                 if id == b"XMP DataXMP" {
@@ -163,16 +213,28 @@ impl MetaParser for GifParser {
                                 }
                                 // 非 XMP 应用扩展：消费 0x21 0xFF size(1) id(11)，转 SubBlocks
                                 self.state = State::SubBlocks;
-                                return PullResult { demand: Demand::Skip(0), consumed: pos + 3 + 11, events };
+                                return PullResult {
+                                    demand: Demand::Skip(0),
+                                    consumed: pos + 3 + 11,
+                                    events,
+                                };
                             }
                             // 其他扩展（注释/图形控制/纯文本）：消费 0x21 label，转 SubBlocks
                             self.state = State::SubBlocks;
-                            return PullResult { demand: Demand::Skip(0), consumed: pos + 2, events };
+                            return PullResult {
+                                demand: Demand::Skip(0),
+                                consumed: pos + 2,
+                                events,
+                            };
                         }
                         _ => {
                             // 畸形引导字节：best-effort 收尾
                             self.done = true;
-                            return PullResult { demand: Demand::Done, consumed: pos, events };
+                            return PullResult {
+                                demand: Demand::Done,
+                                consumed: pos,
+                                events,
+                            };
                         }
                     }
                 }
@@ -234,7 +296,12 @@ mod tests {
         let meta = crate::driver::finalize(col, crate::model::FileFormat::Gif);
         assert_eq!(meta.unified.width, Some(800));
         assert_eq!(meta.unified.height, Some(600));
-        assert!(meta.raw.xmp.iter().any(|x| x.name == "Make" && x.value == "Acme"));
+        assert!(
+            meta.raw
+                .xmp
+                .iter()
+                .any(|x| x.name == "Make" && x.value == "Acme")
+        );
     }
 
     #[test]

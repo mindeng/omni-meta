@@ -7,7 +7,9 @@ use alloc::vec::Vec;
 use crate::codecs;
 use crate::demand::{Demand, Event, MetaParser, PayloadKind};
 use crate::limits::Limits;
-use crate::model::{ContainerTag, ExifTag, Field, FileFormat, Metadata, RawTags, WarnKind, Warning, XmpProperty};
+use crate::model::{
+    ContainerTag, ExifTag, Field, FileFormat, Metadata, RawTags, WarnKind, Warning, XmpProperty,
+};
 use crate::normalize::normalize;
 
 /// 解析过程中累积的产物。
@@ -29,10 +31,16 @@ pub struct Collector {
 impl Collector {
     fn handle(&mut self, ev: Event<'_>) {
         match ev {
-            Event::Payload { kind: PayloadKind::Exif, data } => {
+            Event::Payload {
+                kind: PayloadKind::Exif,
+                data,
+            } => {
                 codecs::exif::decode(data, &mut self.exif, &mut self.warnings, &self.limits);
             }
-            Event::Payload { kind: PayloadKind::Xmp, data } => {
+            Event::Payload {
+                kind: PayloadKind::Xmp,
+                data,
+            } => {
                 codecs::xmp::decode(data, &mut self.xmp, &mut self.warnings, &self.limits);
             }
             Event::Field(Field::Width(w)) => {
@@ -97,7 +105,11 @@ pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
     let (width, height) = (col.width, col.height);
     let (duration_ms, created) = (col.duration_ms, col.created);
     let (gps, camera_make, camera_model) = (col.gps, col.camera_make, col.camera_model);
-    let raw = RawTags { exif: col.exif, xmp: col.xmp, container: col.container };
+    let raw = RawTags {
+        exif: col.exif,
+        xmp: col.xmp,
+        container: col.container,
+    };
     let mut warnings = col.warnings;
     let mut unified = normalize(&raw, &mut warnings);
     if let Some(w) = width {
@@ -121,7 +133,12 @@ pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
     if let Some(m) = camera_model {
         unified.camera_model = Some(m);
     }
-    Metadata { unified, raw, warnings, format }
+    Metadata {
+        unified,
+        raw,
+        warnings,
+        format,
+    }
 }
 
 /// 流式驱动：自有增长缓冲 + parser + Collector。被 PushParser/blocking/seek 复用。
@@ -258,7 +275,13 @@ impl StreamDriver {
 
             // 2) 拉解析器（拆分字段借用：parser &mut 与 buf & 互不相干）。
             let (demand, consumed) = {
-                let Self { buf, cursor, parser, collector, .. } = self;
+                let Self {
+                    buf,
+                    cursor,
+                    parser,
+                    collector,
+                    ..
+                } = self;
                 let window = &buf[*cursor..];
                 let res = parser.pull(window);
                 for ev in res.events {
@@ -377,7 +400,10 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
     let mut iters: usize = 0;
     loop {
         if iters >= max_iters {
-            col.warnings.push(Warning { offset: pos as u64, kind: WarnKind::UnreachableSection });
+            col.warnings.push(Warning {
+                offset: pos as u64,
+                kind: WarnKind::UnreachableSection,
+            });
             break;
         }
         iters += 1;
@@ -401,7 +427,10 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
                     pos = stuck;
                 } else {
                     // 字节确实不够（slice 给的是全量剩余）→ 截断。
-                    col.warnings.push(Warning { offset: stuck as u64, kind: WarnKind::Truncated });
+                    col.warnings.push(Warning {
+                        offset: stuck as u64,
+                        kind: WarnKind::Truncated,
+                    });
                     break;
                 }
             }
@@ -414,14 +443,20 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
                     Ok(p) if p <= buf.len() => {
                         if p == start {
                             // 零前进（consumed==0 且 n==0）→ 防卡死，按截断收尾。
-                            col.warnings.push(Warning { offset: start as u64, kind: WarnKind::Truncated });
+                            col.warnings.push(Warning {
+                                offset: start as u64,
+                                kind: WarnKind::Truncated,
+                            });
                             break;
                         }
                         pos = p;
                     }
                     _ => {
                         // 前向 Skip 越过缓冲尾 = 声明数据短于结构 → Truncated。
-                        col.warnings.push(Warning { offset: target, kind: WarnKind::Truncated });
+                        col.warnings.push(Warning {
+                            offset: target,
+                            kind: WarnKind::Truncated,
+                        });
                         break;
                     }
                 }
@@ -431,14 +466,20 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
                     Ok(up) if up <= buf.len() => {
                         if up == start {
                             // 零前进（SeekTo 回到当前位置）→ 防卡死，按截断收尾。
-                            col.warnings.push(Warning { offset: start as u64, kind: WarnKind::Truncated });
+                            col.warnings.push(Warning {
+                                offset: start as u64,
+                                kind: WarnKind::Truncated,
+                            });
                             break;
                         }
                         pos = up;
                     }
                     _ => {
                         // 前向 SeekTo 越过缓冲尾 = 声明数据短于结构 → Truncated。
-                        col.warnings.push(Warning { offset: p, kind: WarnKind::Truncated });
+                        col.warnings.push(Warning {
+                            offset: p,
+                            kind: WarnKind::Truncated,
+                        });
                         break;
                     }
                 }
@@ -465,7 +506,11 @@ mod tests {
         fn pull<'a>(&mut self, _input: &'a [u8]) -> PullResult<'a> {
             let demand = self.steps.get(self.i).cloned().unwrap_or(Demand::Done);
             self.i += 1;
-            PullResult { demand, consumed: 0, events: Vec::new() }
+            PullResult {
+                demand,
+                consumed: 0,
+                events: Vec::new(),
+            }
         }
     }
 
@@ -473,7 +518,11 @@ mod tests {
     struct AlwaysSkipZero;
     impl MetaParser for AlwaysSkipZero {
         fn pull<'a>(&mut self, _input: &'a [u8]) -> PullResult<'a> {
-            PullResult { demand: Demand::Skip(0), consumed: 0, events: Vec::new() }
+            PullResult {
+                demand: Demand::Skip(0),
+                consumed: 0,
+                events: Vec::new(),
+            }
         }
     }
 
@@ -481,7 +530,11 @@ mod tests {
     struct AlwaysSeekZero;
     impl MetaParser for AlwaysSeekZero {
         fn pull<'a>(&mut self, _input: &'a [u8]) -> PullResult<'a> {
-            PullResult { demand: Demand::SeekTo(0), consumed: 0, events: Vec::new() }
+            PullResult {
+                demand: Demand::SeekTo(0),
+                consumed: 0,
+                events: Vec::new(),
+            }
         }
     }
 
@@ -494,16 +547,28 @@ mod tests {
     impl MetaParser for ConsecutiveSeekParser {
         fn pull<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
             if input.len() < 4 {
-                return PullResult { demand: Demand::NeedBytes(4), consumed: 0, events: Vec::new() };
+                return PullResult {
+                    demand: Demand::NeedBytes(4),
+                    consumed: 0,
+                    events: Vec::new(),
+                };
             }
             if self.step == 0 {
                 self.step = 1;
                 // 消费 4 字节，SeekTo 到绝对偏移 4 = 紧邻当前位置（零间隔）。
                 let events = vec![Event::Field(Field::Width(1))];
-                return PullResult { demand: Demand::SeekTo(4), consumed: 4, events };
+                return PullResult {
+                    demand: Demand::SeekTo(4),
+                    consumed: 4,
+                    events,
+                };
             }
             let events = vec![Event::Field(Field::Height(2))];
-            PullResult { demand: Demand::Done, consumed: 4, events }
+            PullResult {
+                demand: Demand::Done,
+                consumed: 4,
+                events,
+            }
         }
     }
 
@@ -511,7 +576,10 @@ mod tests {
     fn stream_consecutive_zero_gap_seek_with_consumed_progresses() {
         // consumed>0 的零跳 SeekTo（相邻目标）必须继续推进，而非被防卡死守卫误杀。
         let bytes = [0u8; 8];
-        let col = run_stream(&[&bytes], alloc::boxed::Box::new(ConsecutiveSeekParser { step: 0 }));
+        let col = run_stream(
+            &[&bytes],
+            alloc::boxed::Box::new(ConsecutiveSeekParser { step: 0 }),
+        );
         assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
         assert_eq!(col.width, Some(1));
         assert_eq!(col.height, Some(2));
@@ -526,24 +594,48 @@ mod tests {
     impl MetaParser for TwoBoxParser {
         fn pull<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
             if input.is_empty() {
-                return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+                return PullResult {
+                    demand: Demand::Done,
+                    consumed: 0,
+                    events: Vec::new(),
+                };
             }
             if !self.skipped {
                 if input.len() < 4 {
-                    return PullResult { demand: Demand::NeedBytes(4), consumed: 0, events: Vec::new() };
+                    return PullResult {
+                        demand: Demand::NeedBytes(4),
+                        consumed: 0,
+                        events: Vec::new(),
+                    };
                 }
                 self.skipped = true;
-                return PullResult { demand: Demand::Skip(4), consumed: 0, events: Vec::new() };
+                return PullResult {
+                    demand: Demand::Skip(4),
+                    consumed: 0,
+                    events: Vec::new(),
+                };
             }
             if !self.emitted {
                 if input.len() < 4 {
-                    return PullResult { demand: Demand::NeedBytes(4), consumed: 0, events: Vec::new() };
+                    return PullResult {
+                        demand: Demand::NeedBytes(4),
+                        consumed: 0,
+                        events: Vec::new(),
+                    };
                 }
                 self.emitted = true;
                 let events = vec![Event::Field(Field::Width(7))];
-                return PullResult { demand: Demand::Done, consumed: 4, events };
+                return PullResult {
+                    demand: Demand::Done,
+                    consumed: 4,
+                    events,
+                };
             }
-            PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() }
+            PullResult {
+                demand: Demand::Done,
+                consumed: 0,
+                events: Vec::new(),
+            }
         }
     }
 
@@ -554,15 +646,28 @@ mod tests {
         // 而非用空窗口回调解析器导致 TwoBoxParser 提前 Done、漏掉次盒的 Width。
         let bytes = [0u8; 8];
         let chunks: Vec<&[u8]> = bytes.chunks(1).collect();
-        let col = run_stream(&chunks, alloc::boxed::Box::new(TwoBoxParser { skipped: false, emitted: false }));
-        assert_eq!(col.width, Some(7), "次盒的 Width 必须被读到（未被边界空窗口提前结束）");
+        let col = run_stream(
+            &chunks,
+            alloc::boxed::Box::new(TwoBoxParser {
+                skipped: false,
+                emitted: false,
+            }),
+        );
+        assert_eq!(
+            col.width,
+            Some(7),
+            "次盒的 Width 必须被读到（未被边界空窗口提前结束）"
+        );
         assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
     }
 
     #[test]
     fn skip_advances_then_done() {
         let buf = [0u8; 20];
-        let mut p = Script { steps: vec![Demand::Skip(10)], i: 0 };
+        let mut p = Script {
+            steps: vec![Demand::Skip(10)],
+            i: 0,
+        };
         let col = drive_slice(&buf, &mut p, Limits::default());
         assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
     }
@@ -570,7 +675,10 @@ mod tests {
     #[test]
     fn seek_within_bounds_then_done() {
         let buf = [0u8; 20];
-        let mut p = Script { steps: vec![Demand::SeekTo(5)], i: 0 };
+        let mut p = Script {
+            steps: vec![Demand::SeekTo(5)],
+            i: 0,
+        };
         let col = drive_slice(&buf, &mut p, Limits::default());
         assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
     }
@@ -579,7 +687,10 @@ mod tests {
     fn seek_past_end_warns_truncated() {
         // 前向 SeekTo 越过文件尾 = 声明的数据短于结构 → Truncated（与 StreamDriver 一致）。
         let buf = [0u8; 4];
-        let mut p = Script { steps: vec![Demand::SeekTo(9999)], i: 0 };
+        let mut p = Script {
+            steps: vec![Demand::SeekTo(9999)],
+            i: 0,
+        };
         let col = drive_slice(&buf, &mut p, Limits::default());
         assert_eq!(col.warnings.len(), 1);
         assert_eq!(col.warnings[0].kind, WarnKind::Truncated);
@@ -589,7 +700,10 @@ mod tests {
     fn skip_past_end_warns_truncated() {
         // 前向 Skip 越过文件尾 → Truncated。
         let buf = [0u8; 4];
-        let mut p = Script { steps: vec![Demand::Skip(9999)], i: 0 };
+        let mut p = Script {
+            steps: vec![Demand::Skip(9999)],
+            i: 0,
+        };
         let col = drive_slice(&buf, &mut p, Limits::default());
         assert_eq!(col.warnings.len(), 1);
         assert_eq!(col.warnings[0].kind, WarnKind::Truncated);
@@ -615,7 +729,10 @@ mod tests {
     fn stream_skip_past_eof_warns_truncated() {
         // 流式：Skip 越过文件尾，在 EOF 处亦判 Truncated（与 slice 一致）。
         let mut d = StreamDriver::new(
-            alloc::boxed::Box::new(Script { steps: vec![Demand::Skip(9999)], i: 0 }),
+            alloc::boxed::Box::new(Script {
+                steps: vec![Demand::Skip(9999)],
+                i: 0,
+            }),
             Limits::default(),
         );
         let _ = d.feed(&[0u8; 4]);
@@ -628,7 +745,10 @@ mod tests {
     #[test]
     fn need_bytes_yields_truncated_warning() {
         let buf = [0u8; 4];
-        let mut p = Script { steps: vec![Demand::NeedBytes(99)], i: 0 };
+        let mut p = Script {
+            steps: vec![Demand::NeedBytes(99)],
+            i: 0,
+        };
         let col = drive_slice(&buf, &mut p, Limits::default());
         assert_eq!(col.warnings.len(), 1);
         assert_eq!(col.warnings[0].kind, WarnKind::Truncated);
@@ -702,7 +822,10 @@ mod tests {
     #[test]
     fn stream_drives_jpeg_in_one_chunk() {
         let j = make_jpeg_with_exif();
-        let col = run_stream(&[&j], alloc::boxed::Box::new(crate::formats::jpeg::JpegParser::new()));
+        let col = run_stream(
+            &[&j],
+            alloc::boxed::Box::new(crate::formats::jpeg::JpegParser::new()),
+        );
         assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
         assert_eq!(col.exif.len(), 2);
     }
@@ -711,7 +834,10 @@ mod tests {
     fn stream_drives_jpeg_byte_by_byte() {
         let j = make_jpeg_with_exif();
         let chunks: Vec<&[u8]> = j.chunks(1).collect();
-        let col = run_stream(&chunks, alloc::boxed::Box::new(crate::formats::jpeg::JpegParser::new()));
+        let col = run_stream(
+            &chunks,
+            alloc::boxed::Box::new(crate::formats::jpeg::JpegParser::new()),
+        );
         assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
         assert_eq!(col.exif.len(), 2);
     }
@@ -720,7 +846,10 @@ mod tests {
     fn stream_skip_outcome_then_seek_external() {
         // 用 Script：先 Skip(100)，再 Done。模拟可 Seek 适配器：feed 少量后用 skip_external 抵扣。
         let mut d = StreamDriver::new(
-            alloc::boxed::Box::new(Script { steps: vec![Demand::Skip(100)], i: 0 }),
+            alloc::boxed::Box::new(Script {
+                steps: vec![Demand::Skip(100)],
+                i: 0,
+            }),
             Limits::default(),
         );
         // 喂 4 字节触发首个 pull → Script 立即 Skip(100)，driver 吞掉这 4 字节，剩余 skip。
@@ -743,7 +872,10 @@ mod tests {
         j.extend_from_slice(&20u16.to_be_bytes());
         j.extend_from_slice(&[0xAA, 0xBB]);
         let chunks: Vec<&[u8]> = j.chunks(1).collect();
-        let col = run_stream(&chunks, alloc::boxed::Box::new(crate::formats::jpeg::JpegParser::new()));
+        let col = run_stream(
+            &chunks,
+            alloc::boxed::Box::new(crate::formats::jpeg::JpegParser::new()),
+        );
         assert_eq!(col.warnings.len(), 1);
         assert_eq!(col.warnings[0].kind, WarnKind::Truncated);
         assert_eq!(col.warnings[0].offset, 2);
@@ -753,13 +885,20 @@ mod tests {
     fn stream_seekto_backward_beyond_retained_warns() {
         // SeekTo(0) 在丢弃前缀后属于"早于保留下界"→ UnreachableSection。
         let mut d = StreamDriver::new(
-            alloc::boxed::Box::new(Script { steps: vec![Demand::Skip(4), Demand::SeekTo(0)], i: 0 }),
+            alloc::boxed::Box::new(Script {
+                steps: vec![Demand::Skip(4), Demand::SeekTo(0)],
+                i: 0,
+            }),
             Limits::default(),
         );
         let _ = d.feed(&[0u8; 8]);
         let _ = d.feed(&[]);
         let col = d.finish();
-        assert!(col.warnings.iter().any(|w| w.kind == WarnKind::UnreachableSection));
+        assert!(
+            col.warnings
+                .iter()
+                .any(|w| w.kind == WarnKind::UnreachableSection)
+        );
     }
 
     fn make_jpeg_with_exif() -> Vec<u8> {
@@ -783,13 +922,16 @@ mod tests {
         let col = drive_slice(&j, &mut parser, Limits::default());
         let meta = finalize(col, FileFormat::Jpeg);
         assert_eq!(meta.format, FileFormat::Jpeg);
-        assert_eq!(meta.unified.orientation, Some(crate::model::Orientation::Rotate90));
+        assert_eq!(
+            meta.unified.orientation,
+            Some(crate::model::Orientation::Rotate90)
+        );
         assert_eq!(meta.unified.camera_make.as_deref(), Some("Acme"));
         assert_eq!(meta.raw.exif.len(), 2);
     }
 
-    use crate::model::{Field, XmpProperty};
     use crate::demand::PayloadKind;
+    use crate::model::{Field, XmpProperty};
 
     /// 一次性发出 Width/Height Field + 一个 XMP 载荷后 Done 的假解析器。
     struct FieldXmpEmitter;
@@ -804,7 +946,11 @@ mod tests {
                     data: br#"<rdf:Description tiff:Make="Acme"/>"#,
                 },
             ];
-            PullResult { demand: Demand::Done, consumed: input.len(), events }
+            PullResult {
+                demand: Demand::Done,
+                consumed: input.len(),
+                events,
+            }
         }
     }
 
@@ -839,7 +985,11 @@ mod tests {
                     data: br#"<rdf:Description tiff:ImageWidth="999" tiff:ImageLength="888"/>"#,
                 },
             ];
-            PullResult { demand: Demand::Done, consumed: input.len(), events }
+            PullResult {
+                demand: Demand::Done,
+                consumed: input.len(),
+                events,
+            }
         }
     }
 
@@ -849,10 +999,15 @@ mod tests {
         let mut p = DimConflictEmitter;
         let col = drive_slice(&buf, &mut p, Limits::default());
         let meta = finalize(col, FileFormat::Png);
-        assert_eq!(meta.unified.width, Some(1920));  // 容器值胜出，非 XMP 的 999
+        assert_eq!(meta.unified.width, Some(1920)); // 容器值胜出，非 XMP 的 999
         assert_eq!(meta.unified.height, Some(1080));
         // XMP 仍保留在 raw 层
-        assert!(meta.raw.xmp.iter().any(|x| x.name == "ImageWidth" && x.value == "999"));
+        assert!(
+            meta.raw
+                .xmp
+                .iter()
+                .any(|x| x.name == "ImageWidth" && x.value == "999")
+        );
     }
 
     use crate::model::DateTimeParts;
@@ -865,10 +1020,20 @@ mod tests {
             let events = vec![
                 Event::Field(Field::Duration(1_501_500)),
                 Event::Field(Field::Created(DateTimeParts {
-                    year: 2018, month: 1, day: 1, hour: 12, minute: 0, second: 0, tz_offset_min: Some(0),
+                    year: 2018,
+                    month: 1,
+                    day: 1,
+                    hour: 12,
+                    minute: 0,
+                    second: 0,
+                    tz_offset_min: Some(0),
                 })),
             ];
-            PullResult { demand: Demand::Done, consumed: input.len(), events }
+            PullResult {
+                demand: Demand::Done,
+                consumed: input.len(),
+                events,
+            }
         }
     }
 
@@ -889,9 +1054,19 @@ mod tests {
         fn pull<'a>(&mut self, input: &'a [u8]) -> crate::demand::PullResult<'a> {
             use crate::demand::PullResult;
             let events = vec![Event::Field(Field::Created(DateTimeParts {
-                year: 2018, month: 1, day: 1, hour: 0, minute: 0, second: 0, tz_offset_min: Some(0),
+                year: 2018,
+                month: 1,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                tz_offset_min: Some(0),
             }))];
-            PullResult { demand: Demand::Done, consumed: input.len(), events }
+            PullResult {
+                demand: Demand::Done,
+                consumed: input.len(),
+                events,
+            }
         }
     }
 
@@ -911,12 +1086,25 @@ mod tests {
             use crate::demand::{PayloadKind, PullResult};
             // 最小 TIFF：Exif sub-IFD(0x8769) → DateTimeOriginal(0x9003)="2003:01:24 09:20:00"
             let events = vec![
-                Event::Payload { kind: PayloadKind::Exif, data: TIFF_WITH_DTO },
+                Event::Payload {
+                    kind: PayloadKind::Exif,
+                    data: TIFF_WITH_DTO,
+                },
                 Event::Field(Field::Created(DateTimeParts {
-                    year: 2018, month: 6, day: 15, hour: 0, minute: 0, second: 0, tz_offset_min: Some(0),
+                    year: 2018,
+                    month: 6,
+                    day: 15,
+                    hour: 0,
+                    minute: 0,
+                    second: 0,
+                    tz_offset_min: Some(0),
                 })),
             ];
-            PullResult { demand: Demand::Done, consumed: 0, events }
+            PullResult {
+                demand: Demand::Done,
+                consumed: 0,
+                events,
+            }
         }
     }
 
@@ -930,34 +1118,25 @@ mod tests {
     ///  @44 "2003:01:24 09:20:00\0"
     static TIFF_WITH_DTO: &[u8] = &[
         // @0 TIFF header: II, magic=42, IFD0 offset=8
-        b'I', b'I',
-        42, 0,           // magic u16 LE
-        8, 0, 0, 0,      // IFD0 offset u32 LE
+        b'I', b'I', 42, 0, // magic u16 LE
+        8, 0, 0, 0, // IFD0 offset u32 LE
         // @8 IFD0: count=1
-        1, 0,
-        // entry: tag=0x8769, type=4(LONG), count=1, value=26
-        0x69, 0x87,      // tag 0x8769 LE
-        4, 0,            // type LONG
-        1, 0, 0, 0,      // count=1
-        26, 0, 0, 0,     // offset to Exif IFD = 26
+        1, 0, // entry: tag=0x8769, type=4(LONG), count=1, value=26
+        0x69, 0x87, // tag 0x8769 LE
+        4, 0, // type LONG
+        1, 0, 0, 0, // count=1
+        26, 0, 0, 0, // offset to Exif IFD = 26
         // @22 IFD0 next=0
-        0, 0, 0, 0,
-        // @26 Exif IFD: count=1
-        1, 0,
-        // entry: tag=0x9003, type=2(ASCII), count=20, offset=44
-        0x03, 0x90,      // tag 0x9003 LE
-        2, 0,            // type ASCII
-        20, 0, 0, 0,     // count=20 (19 chars + NUL)
-        44, 0, 0, 0,     // offset to string data = 44
+        0, 0, 0, 0, // @26 Exif IFD: count=1
+        1, 0, // entry: tag=0x9003, type=2(ASCII), count=20, offset=44
+        0x03, 0x90, // tag 0x9003 LE
+        2, 0, // type ASCII
+        20, 0, 0, 0, // count=20 (19 chars + NUL)
+        44, 0, 0, 0, // offset to string data = 44
         // @40 Exif IFD next=0
-        0, 0, 0, 0,
-        // @44 "2003:01:24 09:20:00\0"
-        b'2', b'0', b'0', b'3', b':',
-        b'0', b'1', b':',
-        b'2', b'4', b' ',
-        b'0', b'9', b':',
-        b'2', b'0', b':',
-        b'0', b'0', 0,
+        0, 0, 0, 0, // @44 "2003:01:24 09:20:00\0"
+        b'2', b'0', b'0', b'3', b':', b'0', b'1', b':', b'2', b'4', b' ', b'0', b'9', b':', b'2',
+        b'0', b':', b'0', b'0', 0,
     ];
 
     #[test]
@@ -967,7 +1146,10 @@ mod tests {
         let col = drive_slice(&buf, &mut p, Limits::default());
         let meta = finalize(col, FileFormat::Mp4);
         // 先确认 EXIF 路径确实产出了 created（否则测试无意义）
-        assert!(meta.raw.exif.iter().any(|t| t.tag == 0x9003), "EXIF DateTimeOriginal 应被解码");
+        assert!(
+            meta.raw.exif.iter().any(|t| t.tag == 0x9003),
+            "EXIF DateTimeOriginal 应被解码"
+        );
         // 容器值（2018）覆盖 EXIF 派生值（2003）
         assert_eq!(meta.unified.created.map(|d| d.year), Some(2018));
     }
@@ -982,7 +1164,11 @@ mod tests {
                     demand: Demand::Done,
                     consumed: 0,
                     events: alloc::vec![
-                        Event::Field(Field::Gps(Gps { lat_e7: 1, lon_e7: 2, alt_mm: Some(3) })),
+                        Event::Field(Field::Gps(Gps {
+                            lat_e7: 1,
+                            lon_e7: 2,
+                            alt_mm: Some(3)
+                        })),
                         Event::Field(Field::CameraMake(alloc::string::String::from("Apple"))),
                         Event::Field(Field::CameraModel(alloc::string::String::from("iPhone 15"))),
                     ],
@@ -993,7 +1179,14 @@ mod tests {
         let mut p = Emitter;
         let col = drive_slice(&buf, &mut p, Limits::default());
         let meta = finalize(col, FileFormat::Mov);
-        assert_eq!(meta.unified.gps, Some(Gps { lat_e7: 1, lon_e7: 2, alt_mm: Some(3) }));
+        assert_eq!(
+            meta.unified.gps,
+            Some(Gps {
+                lat_e7: 1,
+                lon_e7: 2,
+                alt_mm: Some(3)
+            })
+        );
         assert_eq!(meta.unified.camera_make.as_deref(), Some("Apple"));
         assert_eq!(meta.unified.camera_model.as_deref(), Some("iPhone 15"));
     }
@@ -1007,8 +1200,13 @@ mod tests {
             exif: Vec::new(),
             xmp: Vec::new(),
             warnings: Vec::new(),
-            width: None, height: None, duration_ms: None, created: None,
-            gps: None, camera_make: None, camera_model: None,
+            width: None,
+            height: None,
+            duration_ms: None,
+            created: None,
+            gps: None,
+            camera_make: None,
+            camera_model: None,
             container: Vec::new(),
             limits,
         };

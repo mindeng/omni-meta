@@ -30,7 +30,11 @@ impl StripPlanner for WebpStripper {
             if !input.is_empty() {
                 cmds.push(StripCmd::Emit(input.len()));
             }
-            return StripResult { demand: StripDemand::Done, consumed: input.len(), cmds };
+            return StripResult {
+                demand: StripDemand::Done,
+                consumed: input.len(),
+                cmds,
+            };
         }
 
         let mut report_removed: Vec<(usize, RemovedKind)> = Vec::new(); // (len, kind)
@@ -41,7 +45,9 @@ impl StripPlanner for WebpStripper {
             let mut p = 12usize;
             while p + 8 <= input.len() {
                 let fourcc = &input[p..p + 4];
-                let size = u32::from_le_bytes([input[p + 4], input[p + 5], input[p + 6], input[p + 7]]) as usize;
+                let size =
+                    u32::from_le_bytes([input[p + 4], input[p + 5], input[p + 6], input[p + 7]])
+                        as usize;
                 let pad = size & 1;
                 let data_end = match p.checked_add(8).and_then(|v| v.checked_add(size)) {
                     Some(v) if v <= input.len() => v,
@@ -68,9 +74,14 @@ impl StripPlanner for WebpStripper {
         let mut truncated_tail: Option<usize> = None;
         while p + 8 <= input.len() {
             let fourcc = [input[p], input[p + 1], input[p + 2], input[p + 3]];
-            let size = u32::from_le_bytes([input[p + 4], input[p + 5], input[p + 6], input[p + 7]]) as usize;
+            let size = u32::from_le_bytes([input[p + 4], input[p + 5], input[p + 6], input[p + 7]])
+                as usize;
             let pad = size & 1;
-            let chunk_end = match p.checked_add(8).and_then(|v| v.checked_add(size)).and_then(|v| v.checked_add(pad)) {
+            let chunk_end = match p
+                .checked_add(8)
+                .and_then(|v| v.checked_add(size))
+                .and_then(|v| v.checked_add(pad))
+            {
                 Some(v) if v <= input.len() => v,
                 _ => {
                     truncated_tail = Some(p);
@@ -82,7 +93,11 @@ impl StripPlanner for WebpStripper {
                 b"EXIF" => Some(RemovedKind::Exif),
                 b"XMP " => Some(RemovedKind::Xmp),
                 b"ICCP" => {
-                    if self.opts.keep_icc { None } else { Some(RemovedKind::Icc) }
+                    if self.opts.keep_icc {
+                        None
+                    } else {
+                        Some(RemovedKind::Icc)
+                    }
                 }
                 _ => None,
             };
@@ -121,8 +136,16 @@ impl StripPlanner for WebpStripper {
             if fp < new_body.len() {
                 let mut flags = new_body[fp];
                 flags &= !FLAG_XMP;
-                if emitted_exif { flags |= FLAG_EXIF; } else { flags &= !FLAG_EXIF; }
-                if emitted_icc { flags |= FLAG_ICC; } else { flags &= !FLAG_ICC; }
+                if emitted_exif {
+                    flags |= FLAG_EXIF;
+                } else {
+                    flags &= !FLAG_EXIF;
+                }
+                if emitted_icc {
+                    flags |= FLAG_ICC;
+                } else {
+                    flags &= !FLAG_ICC;
+                }
                 new_body[fp] = flags;
             }
         }
@@ -139,20 +162,30 @@ impl StripPlanner for WebpStripper {
         out_chunk.extend_from_slice(&new_body);
 
         let mut cmds: Vec<StripCmd> = Vec::new();
-        cmds.push(StripCmd::Replace { consume: input.len(), with: out_chunk });
+        cmds.push(StripCmd::Replace {
+            consume: input.len(),
+            with: out_chunk,
+        });
         for (len, kind) in report_removed {
-            cmds.push(StripCmd::Account { len: len as u64, kind });
+            cmds.push(StripCmd::Account {
+                len: len as u64,
+                kind,
+            });
         }
 
-        StripResult { demand: StripDemand::Done, consumed: input.len(), cmds }
+        StripResult {
+            demand: StripDemand::Done,
+            consumed: input.len(),
+            cmds,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::strip::{drive_strip_slice, RemovedKind, StripOptions};
     use crate::model::FileFormat;
+    use crate::strip::{RemovedKind, StripOptions, drive_strip_slice};
 
     fn riff_chunk(fourcc: &[u8; 4], data: &[u8]) -> alloc::vec::Vec<u8> {
         let mut c = alloc::vec::Vec::new();
@@ -216,7 +249,10 @@ mod tests {
         let (out, report) = run(&full_webp(), StripOptions::default());
         let meta = crate::read_slice(&out, crate::Options::default()).unwrap();
         assert!(meta.raw.xmp.is_empty());
-        assert_eq!(meta.unified.orientation, Some(crate::model::Orientation::Rotate90));
+        assert_eq!(
+            meta.unified.orientation,
+            Some(crate::model::Orientation::Rotate90)
+        );
         assert!(report.removed.contains(RemovedKind::Exif));
         assert!(report.removed.contains(RemovedKind::Xmp));
         assert!(out.windows(4).any(|w| w == b"ICCP"));
@@ -255,7 +291,10 @@ mod tests {
         let input = full_webp();
         let (first, _) = run(&input, StripOptions::default());
         let (second, _) = run(&first, StripOptions::default());
-        assert_eq!(first, second, "default strip must be idempotent (byte-equal on second pass)");
+        assert_eq!(
+            first, second,
+            "default strip must be idempotent (byte-equal on second pass)"
+        );
     }
 
     #[test]

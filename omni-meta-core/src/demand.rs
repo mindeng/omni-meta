@@ -30,7 +30,10 @@ pub enum PayloadKind {
 /// 解析过程中增量产出的事件。Payload 借用驱动缓冲，零拷贝。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event<'a> {
-    Payload { kind: PayloadKind, data: &'a [u8] },
+    Payload {
+        kind: PayloadKind,
+        data: &'a [u8],
+    },
     /// 容器原生字段（width/height 等）。
     Field(Field),
     /// 容器原生 key-value 标签（QuickTime mdta / udta），原样入 raw.container。
@@ -98,7 +101,10 @@ mod tests {
     #[test]
     fn event_warning_variant_roundtrips() {
         use crate::model::{WarnKind, Warning};
-        let ev: Event<'static> = Event::Warning(Warning { offset: 42, kind: WarnKind::Truncated });
+        let ev: Event<'static> = Event::Warning(Warning {
+            offset: 42,
+            kind: WarnKind::Truncated,
+        });
         match ev {
             Event::Warning(w) => {
                 assert_eq!(w.offset, 42);

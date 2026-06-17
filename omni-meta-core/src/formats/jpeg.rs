@@ -24,17 +24,29 @@ impl MetaParser for JpegParser {
     fn pull<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
         let mut events: Vec<Event<'a>> = Vec::new();
         if self.done {
-            return PullResult { demand: Demand::Done, consumed: 0, events };
+            return PullResult {
+                demand: Demand::Done,
+                consumed: 0,
+                events,
+            };
         }
 
         let mut pos = 0usize;
         if !self.saw_soi {
             if input.len() < 2 {
-                return PullResult { demand: Demand::NeedBytes(2), consumed: 0, events };
+                return PullResult {
+                    demand: Demand::NeedBytes(2),
+                    consumed: 0,
+                    events,
+                };
             }
             if input[0] != 0xFF || input[1] != 0xD8 {
                 self.done = true; // 非 JPEG：best-effort 收尾
-                return PullResult { demand: Demand::Done, consumed: 0, events };
+                return PullResult {
+                    demand: Demand::Done,
+                    consumed: 0,
+                    events,
+                };
             }
             self.saw_soi = true;
             pos = 2;
@@ -44,11 +56,19 @@ impl MetaParser for JpegParser {
             let rest = &input[pos..];
             // 段以 0xFF + 码字开头，码字前可有重复 0xFF 填充字节。
             if rest.is_empty() {
-                return PullResult { demand: Demand::NeedBytes(2), consumed: pos, events };
+                return PullResult {
+                    demand: Demand::NeedBytes(2),
+                    consumed: pos,
+                    events,
+                };
             }
             if rest[0] != 0xFF {
                 self.done = true; // 畸形：停止，已收集照常返回
-                return PullResult { demand: Demand::Done, consumed: pos, events };
+                return PullResult {
+                    demand: Demand::Done,
+                    consumed: pos,
+                    events,
+                };
             }
             let mut i = 1;
             while i < rest.len() && rest[i] == 0xFF {
@@ -56,7 +76,11 @@ impl MetaParser for JpegParser {
             }
             if i >= rest.len() {
                 // 还差码字字节
-                return PullResult { demand: Demand::NeedBytes(i + 1), consumed: pos, events };
+                return PullResult {
+                    demand: Demand::NeedBytes(i + 1),
+                    consumed: pos,
+                    events,
+                };
             }
             let marker = rest[i];
             let after = i + 1; // rest 内：码字之后
@@ -65,7 +89,11 @@ impl MetaParser for JpegParser {
                 0xD9 | 0xDA => {
                     // EOI / SOS：元数据到此为止
                     self.done = true;
-                    return PullResult { demand: Demand::Done, consumed: pos + after, events };
+                    return PullResult {
+                        demand: Demand::Done,
+                        consumed: pos + after,
+                        events,
+                    };
                 }
                 0x01 | 0xD0..=0xD7 => {
                     // TEM / RSTn：无长度字段
@@ -76,22 +104,38 @@ impl MetaParser for JpegParser {
                     // 字节填充（0xFF 0x00）出现在标记区属畸形；best-effort 停止，
                     // 不尝试把后续字节解释为长度（否则产生虚假巨型 Skip）。
                     self.done = true;
-                    return PullResult { demand: Demand::Done, consumed: pos, events };
+                    return PullResult {
+                        demand: Demand::Done,
+                        consumed: pos,
+                        events,
+                    };
                 }
                 0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
                     // SOF：读 precision(1) + height(2 BE) + width(2 BE)
                     if rest.len() < after + 2 {
-                        return PullResult { demand: Demand::NeedBytes(after + 2), consumed: pos, events };
+                        return PullResult {
+                            demand: Demand::NeedBytes(after + 2),
+                            consumed: pos,
+                            events,
+                        };
                     }
                     let len = u16::from_be_bytes([rest[after], rest[after + 1]]) as usize;
                     if len < 2 {
                         self.done = true;
-                        return PullResult { demand: Demand::Done, consumed: pos, events };
+                        return PullResult {
+                            demand: Demand::Done,
+                            consumed: pos,
+                            events,
+                        };
                     }
                     let body_start = after + 2;
                     // 需要 body 前 5 字节：precision(1)+height(2)+width(2)
                     if rest.len() < body_start + 5 {
-                        return PullResult { demand: Demand::NeedBytes(body_start + 5), consumed: pos, events };
+                        return PullResult {
+                            demand: Demand::NeedBytes(body_start + 5),
+                            consumed: pos,
+                            events,
+                        };
                     }
                     let h = u16::from_be_bytes([rest[body_start + 1], rest[body_start + 2]]) as u32;
                     let w = u16::from_be_bytes([rest[body_start + 3], rest[body_start + 4]]) as u32;
@@ -107,12 +151,20 @@ impl MetaParser for JpegParser {
                 }
                 _ => {
                     if rest.len() < after + 2 {
-                        return PullResult { demand: Demand::NeedBytes(after + 2), consumed: pos, events };
+                        return PullResult {
+                            demand: Demand::NeedBytes(after + 2),
+                            consumed: pos,
+                            events,
+                        };
                     }
                     let len = u16::from_be_bytes([rest[after], rest[after + 1]]) as usize;
                     if len < 2 {
                         self.done = true; // 畸形长度
-                        return PullResult { demand: Demand::Done, consumed: pos, events };
+                        return PullResult {
+                            demand: Demand::Done,
+                            consumed: pos,
+                            events,
+                        };
                     }
                     let body_len = len - 2;
                     let body_start = after + 2; // rest 内 body 起点
@@ -121,11 +173,18 @@ impl MetaParser for JpegParser {
                     if marker == 0xE1 {
                         // APP1：需整段入窗才能判定并发出
                         if rest.len() < seg_total {
-                            return PullResult { demand: Demand::NeedBytes(seg_total), consumed: pos, events };
+                            return PullResult {
+                                demand: Demand::NeedBytes(seg_total),
+                                consumed: pos,
+                                events,
+                            };
                         }
                         let body = &rest[body_start..seg_total];
                         if body.starts_with(b"Exif\0\0") {
-                            events.push(Event::Payload { kind: PayloadKind::Exif, data: &body[6..] });
+                            events.push(Event::Payload {
+                                kind: PayloadKind::Exif,
+                                data: &body[6..],
+                            });
                         }
                         pos += seg_total;
                         continue;
@@ -214,7 +273,10 @@ mod tests {
         // pull #1：APP0 → Skip(body_len)，consumed = SOI + marker + len = 6
         let r1 = p.pull(&j);
         assert!(matches!(r1.demand, Demand::Skip(_)));
-        let skip_n = match r1.demand { Demand::Skip(n) => n, _ => unreachable!() };
+        let skip_n = match r1.demand {
+            Demand::Skip(n) => n,
+            _ => unreachable!(),
+        };
         let pos2 = r1.consumed + skip_n as usize;
         // pull #2：从 APP1 开始 → Payload + Done
         let r2 = p.pull(&j[pos2..]);
@@ -285,7 +347,11 @@ mod tests {
         // (b) 通过 drive_slice 跑：无警告（停止干净，不触发 UnreachableSection）
         let mut p2 = JpegParser::new();
         let col = drive_slice(&j, &mut p2, Limits::default());
-        assert!(col.warnings.is_empty(), "expected no warnings, got: {:?}", col.warnings);
+        assert!(
+            col.warnings.is_empty(),
+            "expected no warnings, got: {:?}",
+            col.warnings
+        );
     }
 
     /// 截断在 APP1 段体中间：窗口不足应发 NeedBytes 而非静默 Done。
@@ -339,7 +405,11 @@ mod tests {
         // 经 drive_slice 跑完整 fixture：维度收集 + 干净到 Done（无警告）
         let mut p2 = JpegParser::new();
         let col = crate::driver::drive_slice(&j, &mut p2, crate::limits::Limits::default());
-        assert!(col.warnings.is_empty(), "unexpected warnings: {:?}", col.warnings);
+        assert!(
+            col.warnings.is_empty(),
+            "unexpected warnings: {:?}",
+            col.warnings
+        );
     }
 
     /// 非元数据段（APP0/JFIF）应发 Skip 跳过段体，consumed 指向段体起点。

@@ -27,8 +27,20 @@ fn find_orientation(tiff: &[u8]) -> Option<u16> {
         b"MM" => false,
         _ => return None,
     };
-    let rd16 = |b: &[u8]| if le { u16::from_le_bytes([b[0], b[1]]) } else { u16::from_be_bytes([b[0], b[1]]) };
-    let rd32 = |b: &[u8]| if le { u32::from_le_bytes([b[0], b[1], b[2], b[3]]) } else { u32::from_be_bytes([b[0], b[1], b[2], b[3]]) };
+    let rd16 = |b: &[u8]| {
+        if le {
+            u16::from_le_bytes([b[0], b[1]])
+        } else {
+            u16::from_be_bytes([b[0], b[1]])
+        }
+    };
+    let rd32 = |b: &[u8]| {
+        if le {
+            u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+        } else {
+            u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+        }
+    };
     let ifd0 = rd32(&tiff[4..8]) as usize;
     let count_end = ifd0.checked_add(2)?;
     if count_end > tiff.len() {
@@ -59,7 +71,11 @@ impl StripPlanner for JpegStripper {
             if !input.is_empty() {
                 cmds.push(StripCmd::Emit(input.len()));
             }
-            return StripResult { demand: StripDemand::Done, consumed: input.len(), cmds };
+            return StripResult {
+                demand: StripDemand::Done,
+                consumed: input.len(),
+                cmds,
+            };
         }
 
         cmds.push(StripCmd::Emit(2)); // SOI
@@ -137,7 +153,8 @@ impl StripPlanner for JpegStripper {
                     let drop_kind = classify(marker, body, &self.opts);
                     match drop_kind {
                         Some((kind, is_exif)) => {
-                            if is_exif && self.opts.keep_orientation && synth_orientation.is_none() {
+                            if is_exif && self.opts.keep_orientation && synth_orientation.is_none()
+                            {
                                 if body.len() > 6 && body.starts_with(b"Exif\0\0") {
                                     synth_orientation = find_orientation(&body[6..]);
                                 }
@@ -159,7 +176,11 @@ impl StripPlanner for JpegStripper {
             cmds.insert(1, StripCmd::Insert(seg));
         }
 
-        StripResult { demand: StripDemand::Done, consumed: pos, cmds }
+        StripResult {
+            demand: StripDemand::Done,
+            consumed: pos,
+            cmds,
+        }
     }
 }
 
@@ -184,7 +205,11 @@ fn classify(marker: u8, body: &[u8], opts: &StripOptions) -> Option<(RemovedKind
         }
         0xE2 => {
             if body.starts_with(b"ICC_PROFILE\0") {
-                if opts.keep_icc { None } else { Some((RemovedKind::Icc, false)) }
+                if opts.keep_icc {
+                    None
+                } else {
+                    Some((RemovedKind::Icc, false))
+                }
             } else {
                 None
             }
@@ -201,8 +226,8 @@ pub(crate) fn find_orientation_pub(tiff: &[u8]) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::strip::{drive_strip_slice, RemovedKind, StripOptions};
     use crate::model::FileFormat;
+    use crate::strip::{RemovedKind, StripOptions, drive_strip_slice};
 
     fn app_seg(marker: u8, body: &[u8]) -> alloc::vec::Vec<u8> {
         let mut s = alloc::vec::Vec::new();
@@ -248,7 +273,10 @@ mod tests {
         let (out, report) = run(&j, StripOptions::default());
         let meta = crate::read_slice(&out, crate::Options::default()).unwrap();
         assert!(meta.raw.xmp.is_empty());
-        assert_eq!(meta.unified.orientation, Some(crate::model::Orientation::Rotate90));
+        assert_eq!(
+            meta.unified.orientation,
+            Some(crate::model::Orientation::Rotate90)
+        );
         assert_eq!(meta.unified.width, Some(8));
         assert_eq!(meta.unified.height, Some(8));
         assert!(report.removed.contains(RemovedKind::Exif));
@@ -262,7 +290,11 @@ mod tests {
         let j = full_jpeg();
         let (out, _r) = run(&j, StripOptions::aggressive());
         let meta = crate::read_slice(&out, crate::Options::default()).unwrap();
-        assert!(meta.raw.exif.is_empty(), "exif should be empty: {:?}", meta.raw.exif);
+        assert!(
+            meta.raw.exif.is_empty(),
+            "exif should be empty: {:?}",
+            meta.raw.exif
+        );
         assert_eq!(meta.unified.orientation, None);
     }
 

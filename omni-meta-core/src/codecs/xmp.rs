@@ -15,13 +15,19 @@ pub fn decode(
     limits: &Limits,
 ) {
     if packet.len() > limits.max_payload_bytes {
-        warnings.push(Warning { offset: 0, kind: WarnKind::Truncated });
+        warnings.push(Warning {
+            offset: 0,
+            kind: WarnKind::Truncated,
+        });
         return;
     }
     let text = match core::str::from_utf8(packet) {
         Ok(t) => t,
         Err(_) => {
-            warnings.push(Warning { offset: 0, kind: WarnKind::Truncated });
+            warnings.push(Warning {
+                offset: 0,
+                kind: WarnKind::Truncated,
+            });
             return;
         }
     };
@@ -159,7 +165,8 @@ fn scan_elements(text: &str, out: &mut Vec<XmpProperty>, limits: &Limits) {
         if b[i + 1] == b'/' {
             let (px, nm, end) = parse_qname(text, i + 2);
             if let Some(f) = stack.last()
-                && f.prefix == px && f.name == nm
+                && f.prefix == px
+                && f.name == nm
             {
                 stack.pop();
             }
@@ -191,7 +198,12 @@ fn scan_elements(text: &str, out: &mut Vec<XmpProperty>, limits: &Limits) {
         } else {
             let is_alt = px == "rdf" && nm == "Alt";
             if stack.len() < limits.max_depth as usize {
-                stack.push(Frame { prefix: px, name: nm, is_alt, alt_taken: false });
+                stack.push(Frame {
+                    prefix: px,
+                    name: nm,
+                    is_alt,
+                    alt_taken: false,
+                });
             }
             i = content_start;
         }
@@ -319,7 +331,10 @@ mod tests {
         let pkt = br#"<rdf:Description a:one="1" a:two="2" a:three="3"/>"#;
         let mut out = Vec::new();
         let mut warns = Vec::new();
-        let limits = Limits { max_tags: 2, ..Limits::default() };
+        let limits = Limits {
+            max_tags: 2,
+            ..Limits::default()
+        };
         decode(pkt, &mut out, &mut warns, &limits);
         assert_eq!(out.len(), 2);
     }
@@ -332,7 +347,10 @@ mod tests {
 
     #[test]
     fn oversized_packet_rejected() {
-        let limits = Limits { max_payload_bytes: 16, ..Limits::default() };
+        let limits = Limits {
+            max_payload_bytes: 16,
+            ..Limits::default()
+        };
         // 构造一个合法 UTF-8 但超过 max_payload_bytes 的包
         let pkt = b"<rdf:Description tiff:Make=\"Acme\"/>";
         assert!(pkt.len() > 16);

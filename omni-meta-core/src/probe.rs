@@ -15,9 +15,7 @@ pub fn probe(buf: &[u8]) -> FileFormat {
     if buf.len() >= 2 && buf[0] == 0xFF && buf[1] == 0xD8 {
         return FileFormat::Jpeg;
     }
-    if buf.len() >= 8
-        && buf[..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
-    {
+    if buf.len() >= 8 && buf[..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
         return FileFormat::Png;
     }
     if buf.len() >= 12 && &buf[0..4] == b"RIFF" && &buf[8..12] == b"WEBP" {
@@ -41,8 +39,9 @@ pub fn probe(buf: &[u8]) -> FileFormat {
 fn brand_to_format(brand: &[u8]) -> FileFormat {
     match brand {
         b"avif" | b"avis" => FileFormat::Avif,
-        b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx" | b"mif1"
-        | b"msf1" => FileFormat::Heif,
+        b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx" | b"mif1" | b"msf1" => {
+            FileFormat::Heif
+        }
         b"qt  " => FileFormat::Mov,
         // isom/iso2/mp41/mp42/M4V /M4A /dash/avc1… 及其余未知 ISO-BMFF
         _ => FileFormat::Mp4,
@@ -53,7 +52,11 @@ fn brand_to_format(brand: &[u8]) -> FileFormat {
 /// → Unknown（请求更多字节）；达 PROBE_MAX 仍无 → 默认 Mkv（给出确定答案）。
 fn ebml_format(buf: &[u8]) -> FileFormat {
     if let Some(dt) = find_doctype(buf) {
-        return if dt == b"webm" { FileFormat::Webm } else { FileFormat::Mkv };
+        return if dt == b"webm" {
+            FileFormat::Webm
+        } else {
+            FileFormat::Mkv
+        };
     }
     if buf.len() >= PROBE_MAX {
         return FileFormat::Mkv;
@@ -86,9 +89,9 @@ pub(crate) fn parser_for(fmt: FileFormat, limits: Limits) -> Option<Box<dyn Meta
         FileFormat::Png => Some(Box::new(crate::formats::png::PngParser::new())),
         FileFormat::Webp => Some(Box::new(crate::formats::webp::WebpParser::new())),
         FileFormat::Gif => Some(Box::new(crate::formats::gif::GifParser::new())),
-        FileFormat::Heif | FileFormat::Avif | FileFormat::Mp4 | FileFormat::Mov => {
-            Some(Box::new(crate::formats::bmff::BmffParser::with_limits(limits)))
-        }
+        FileFormat::Heif | FileFormat::Avif | FileFormat::Mp4 | FileFormat::Mov => Some(Box::new(
+            crate::formats::bmff::BmffParser::with_limits(limits),
+        )),
         FileFormat::Mkv | FileFormat::Webm => {
             Some(Box::new(crate::formats::ebml::EbmlParser::new()))
         }
@@ -148,8 +151,8 @@ mod tests {
         b.extend_from_slice(&20u32.to_be_bytes()); // size
         b.extend_from_slice(b"ftyp");
         b.extend_from_slice(major);
-        b.extend_from_slice(&0u32.to_be_bytes());   // minor version
-        b.extend_from_slice(b"mif1");               // 一个兼容品牌
+        b.extend_from_slice(&0u32.to_be_bytes()); // minor version
+        b.extend_from_slice(b"mif1"); // 一个兼容品牌
         b
     }
 
@@ -195,7 +198,7 @@ mod tests {
 
     #[test]
     fn read_slice_recognizes_heic_empty_meta() {
-        use crate::adapters::slice::{read_slice, Options};
+        use crate::adapters::slice::{Options, read_slice};
         let buf = ftyp(b"heic");
         let meta = read_slice(&buf, Options::default()).unwrap();
         assert_eq!(meta.format, FileFormat::Heif);

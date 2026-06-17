@@ -26,7 +26,11 @@ impl StripPlanner for PngStripper {
             if !input.is_empty() {
                 cmds.push(StripCmd::Emit(input.len()));
             }
-            return StripResult { demand: StripDemand::Done, consumed: input.len(), cmds };
+            return StripResult {
+                demand: StripDemand::Done,
+                consumed: input.len(),
+                cmds,
+            };
         }
         cmds.push(StripCmd::Emit(8)); // 签名
         let mut pos = 8usize;
@@ -41,10 +45,19 @@ impl StripPlanner for PngStripper {
                 }
                 break;
             }
-            let len = u32::from_be_bytes([input[pos], input[pos + 1], input[pos + 2], input[pos + 3]]) as usize;
+            let len =
+                u32::from_be_bytes([input[pos], input[pos + 1], input[pos + 2], input[pos + 3]])
+                    as usize;
             let ctype = &input[pos + 4..pos + 8];
             let total = match 8usize.checked_add(len).and_then(|v| v.checked_add(4)) {
-                Some(v) if pos.checked_add(v).map(|e| e <= input.len()).unwrap_or(false) => v,
+                Some(v)
+                    if pos
+                        .checked_add(v)
+                        .map(|e| e <= input.len())
+                        .unwrap_or(false) =>
+                {
+                    v
+                }
                 _ => {
                     cmds.push(StripCmd::Emit(input.len() - pos));
                     pos = input.len();
@@ -81,7 +94,11 @@ impl StripPlanner for PngStripper {
             }
         }
 
-        StripResult { demand: StripDemand::Done, consumed: pos, cmds }
+        StripResult {
+            demand: StripDemand::Done,
+            consumed: pos,
+            cmds,
+        }
     }
 }
 
@@ -96,7 +113,11 @@ fn classify(ctype: &[u8], data: &[u8], opts: &StripOptions) -> Option<(RemovedKi
             }
         }
         b"iCCP" => {
-            if opts.keep_icc { None } else { Some((RemovedKind::Icc, false)) }
+            if opts.keep_icc {
+                None
+            } else {
+                Some((RemovedKind::Icc, false))
+            }
         }
         _ => None, // IHDR/PLTE/IDAT/IEND 等保留
     }
@@ -105,8 +126,8 @@ fn classify(ctype: &[u8], data: &[u8], opts: &StripOptions) -> Option<(RemovedKi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::strip::{drive_strip_slice, RemovedKind, StripOptions};
     use crate::model::FileFormat;
+    use crate::strip::{RemovedKind, StripOptions, drive_strip_slice};
 
     const SIG: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
@@ -142,7 +163,10 @@ mod tests {
         let mut p = alloc::vec::Vec::new();
         p.extend_from_slice(&SIG);
         p.extend_from_slice(&ihdr(8, 8));
-        p.extend_from_slice(&chunk(b"eXIf", &crate::strip::exif_synth::orientation_tiff(6)));
+        p.extend_from_slice(&chunk(
+            b"eXIf",
+            &crate::strip::exif_synth::orientation_tiff(6),
+        ));
         p.extend_from_slice(&itxt_xmp(br#"<rdf:Description tiff:Make="Acme"/>"#));
         p.extend_from_slice(&chunk(b"iCCP", b"prof\0\0somedata"));
         p.extend_from_slice(&chunk(b"IDAT", &[1, 2, 3, 4]));
@@ -160,7 +184,10 @@ mod tests {
         let (out, report) = run(&full_png(), StripOptions::default());
         let meta = crate::read_slice(&out, crate::Options::default()).unwrap();
         assert!(meta.raw.xmp.is_empty());
-        assert_eq!(meta.unified.orientation, Some(crate::model::Orientation::Rotate90));
+        assert_eq!(
+            meta.unified.orientation,
+            Some(crate::model::Orientation::Rotate90)
+        );
         assert_eq!(meta.unified.width, Some(8));
         assert!(report.removed.contains(RemovedKind::Exif));
         assert!(report.removed.contains(RemovedKind::Xmp));
@@ -197,6 +224,9 @@ mod tests {
         let input = full_png();
         let (first, _) = run(&input, StripOptions::default());
         let (second, _) = run(&first, StripOptions::default());
-        assert_eq!(first, second, "default strip must be idempotent (byte-equal on second pass)");
+        assert_eq!(
+            first, second,
+            "default strip must be idempotent (byte-equal on second pass)"
+        );
     }
 }

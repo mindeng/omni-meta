@@ -3,7 +3,9 @@
 
 use std::vec::Vec;
 
-use omni_meta::{read_blocking, read_seek, read_slice, Error, Metadata, Options, Outcome, PushParser};
+use omni_meta::{
+    Error, Metadata, Options, Outcome, PushParser, read_blocking, read_seek, read_slice,
+};
 use std::io::Cursor;
 
 // ---- Pure byte-builder functions ----
@@ -84,13 +86,13 @@ pub fn fixture_truncated() -> Vec<u8> {
 
 pub fn fixture_with_sof() -> Vec<u8> {
     let mut j: Vec<u8> = Vec::new();
-    j.extend_from_slice(&[0xFF, 0xD8]);           // SOI
-    j.extend_from_slice(&[0xFF, 0xC0]);           // SOF0
-    j.extend_from_slice(&10u16.to_be_bytes());    // len = 2 + 8 body bytes
-    j.push(8);                                    // precision
-    j.extend_from_slice(&1080u16.to_be_bytes());  // height
-    j.extend_from_slice(&1920u16.to_be_bytes());  // width
-    j.extend_from_slice(&[1, 0x11, 0]);           // 1 component
+    j.extend_from_slice(&[0xFF, 0xD8]); // SOI
+    j.extend_from_slice(&[0xFF, 0xC0]); // SOF0
+    j.extend_from_slice(&10u16.to_be_bytes()); // len = 2 + 8 body bytes
+    j.push(8); // precision
+    j.extend_from_slice(&1080u16.to_be_bytes()); // height
+    j.extend_from_slice(&1920u16.to_be_bytes()); // width
+    j.extend_from_slice(&[1, 0x11, 0]); // 1 component
     let tiff = make_tiff();
     let mut body: Vec<u8> = Vec::new();
     body.extend_from_slice(b"Exif\0\0");
@@ -99,7 +101,7 @@ pub fn fixture_with_sof() -> Vec<u8> {
     j.extend_from_slice(&[0xFF, 0xE1]);
     j.extend_from_slice(&len.to_be_bytes());
     j.extend_from_slice(&body);
-    j.extend_from_slice(&[0xFF, 0xD9]);           // EOI
+    j.extend_from_slice(&[0xFF, 0xD9]); // EOI
     j
 }
 
@@ -183,7 +185,10 @@ pub fn fixture_webp() -> Vec<u8> {
     body.extend_from_slice(b"WEBP");
     body.extend_from_slice(&riff_chunk(b"VP8X", &vp8x));
     body.extend_from_slice(&riff_chunk(b"EXIF", &make_tiff()));
-    body.extend_from_slice(&riff_chunk(b"XMP ", br#"<rdf:Description tiff:Make="Acme"/>"#));
+    body.extend_from_slice(&riff_chunk(
+        b"XMP ",
+        br#"<rdf:Description tiff:Make="Acme"/>"#,
+    ));
 
     let mut f = Vec::new();
     f.extend_from_slice(b"RIFF");
@@ -446,7 +451,12 @@ pub fn fixture_bmff_heic() -> Vec<u8> {
 
     let meta_probe = bmff_meta(0, exif.len() as u64, 0, xmp.len() as u64);
     let base = ftyp.len() as u64 + meta_probe.len() as u64 + 8;
-    let meta = bmff_meta(base, exif.len() as u64, base + exif.len() as u64, xmp.len() as u64);
+    let meta = bmff_meta(
+        base,
+        exif.len() as u64,
+        base + exif.len() as u64,
+        xmp.len() as u64,
+    );
     assert_eq!(meta.len(), meta_probe.len());
 
     let mut mdat_payload = Vec::new();
@@ -477,9 +487,9 @@ pub fn mp4_tkhd_v0(w: u32, h: u32) -> Vec<u8> {
     p.extend_from_slice(&1u32.to_be_bytes()); // track_ID
     p.extend_from_slice(&0u32.to_be_bytes()); // reserved
     p.extend_from_slice(&0u32.to_be_bytes()); // duration
-    p.extend_from_slice(&[0u8; 8]);           // reserved[2]
-    p.extend_from_slice(&[0u8; 8]);           // layer/alt/volume/reserved
-    p.extend_from_slice(&[0u8; 36]);          // matrix
+    p.extend_from_slice(&[0u8; 8]); // reserved[2]
+    p.extend_from_slice(&[0u8; 8]); // layer/alt/volume/reserved
+    p.extend_from_slice(&[0u8; 36]); // matrix
     p.extend_from_slice(&(w << 16).to_be_bytes());
     p.extend_from_slice(&(h << 16).to_be_bytes());
     p
@@ -493,8 +503,14 @@ pub fn fixture_bmff_mp4() -> Vec<u8> {
     let ftyp = bmff_box(b"ftyp", &ftyp_p);
 
     let mut moov_p = Vec::new();
-    moov_p.extend_from_slice(&bmff_box(b"mvhd", &mp4_mvhd_v0(2_082_844_800, 600, 900_900)));
-    moov_p.extend_from_slice(&bmff_box(b"trak", &bmff_box(b"tkhd", &mp4_tkhd_v0(1920, 1080))));
+    moov_p.extend_from_slice(&bmff_box(
+        b"mvhd",
+        &mp4_mvhd_v0(2_082_844_800, 600, 900_900),
+    ));
+    moov_p.extend_from_slice(&bmff_box(
+        b"trak",
+        &bmff_box(b"tkhd", &mp4_tkhd_v0(1920, 1080)),
+    ));
     let moov = bmff_box(b"moov", &moov_p);
 
     let mut f = Vec::new();
@@ -513,7 +529,10 @@ pub fn fixture_bmff_mp4_moov_after_mdat() -> Vec<u8> {
 
     let mut moov_p = Vec::new();
     moov_p.extend_from_slice(&bmff_box(b"mvhd", &mp4_mvhd_v0(0, 1000, 5000)));
-    moov_p.extend_from_slice(&bmff_box(b"trak", &bmff_box(b"tkhd", &mp4_tkhd_v0(640, 480))));
+    moov_p.extend_from_slice(&bmff_box(
+        b"trak",
+        &bmff_box(b"tkhd", &mp4_tkhd_v0(640, 480)),
+    ));
     let moov = bmff_box(b"moov", &moov_p);
 
     let mdat = bmff_box(b"mdat", &[0u8; 10_000]); // >8192 读块，强制 seek 路径
@@ -544,7 +563,10 @@ pub fn fixture_bmff_mp4_v1() -> Vec<u8> {
     let mut moov_p = Vec::new();
     // creation 2_082_844_800 → 1970-01-01; timescale 1000, duration 5000 → 5000 ms
     moov_p.extend_from_slice(&bmff_box(b"mvhd", &mp4_mvhd_v1(2_082_844_800, 1000, 5000)));
-    moov_p.extend_from_slice(&bmff_box(b"trak", &bmff_box(b"tkhd", &mp4_tkhd_v0(1280, 720))));
+    moov_p.extend_from_slice(&bmff_box(
+        b"trak",
+        &bmff_box(b"tkhd", &mp4_tkhd_v0(1280, 720)),
+    ));
     let moov = bmff_box(b"moov", &moov_p);
 
     let mut f = Vec::new();
@@ -562,17 +584,17 @@ pub fn make_tiff_datetime_original() -> Vec<u8> {
     // IFD0 @8: 1 entry (ExifIFDPointer)
     t.extend_from_slice(&1u16.to_le_bytes());
     t.extend_from_slice(&0x8769u16.to_le_bytes()); // ExifIFDPointer
-    t.extend_from_slice(&4u16.to_le_bytes());      // LONG
-    t.extend_from_slice(&1u32.to_le_bytes());      // count
-    t.extend_from_slice(&26u32.to_le_bytes());     // → Exif sub-IFD @26
-    t.extend_from_slice(&0u32.to_le_bytes());      // next IFD = 0
+    t.extend_from_slice(&4u16.to_le_bytes()); // LONG
+    t.extend_from_slice(&1u32.to_le_bytes()); // count
+    t.extend_from_slice(&26u32.to_le_bytes()); // → Exif sub-IFD @26
+    t.extend_from_slice(&0u32.to_le_bytes()); // next IFD = 0
     // Exif sub-IFD @26: 1 entry (DateTimeOriginal)
     t.extend_from_slice(&1u16.to_le_bytes());
     t.extend_from_slice(&0x9003u16.to_le_bytes()); // DateTimeOriginal
-    t.extend_from_slice(&2u16.to_le_bytes());      // ASCII
-    t.extend_from_slice(&20u32.to_le_bytes());     // count = 19 chars + NUL
-    t.extend_from_slice(&44u32.to_le_bytes());     // value offset @44
-    t.extend_from_slice(&0u32.to_le_bytes());      // next IFD = 0
+    t.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+    t.extend_from_slice(&20u32.to_le_bytes()); // count = 19 chars + NUL
+    t.extend_from_slice(&44u32.to_le_bytes()); // value offset @44
+    t.extend_from_slice(&0u32.to_le_bytes()); // next IFD = 0
     // @44: the string
     t.extend_from_slice(b"2003:01:24 09:20:00\0");
     t
@@ -601,8 +623,8 @@ pub fn ebml_video_track(w: u32, h: u32) -> Vec<u8> {
 pub fn ebml_info() -> Vec<u8> {
     let mut p = Vec::new();
     p.extend_from_slice(&ebml_elem(&[0x2A, 0xD7, 0xB1], &1_000_000u64.to_be_bytes())); // TimestampScale
-    p.extend_from_slice(&ebml_elem(&[0x44, 0x89], &5000.0f64.to_be_bytes()));          // Duration
-    p.extend_from_slice(&ebml_elem(&[0x44, 0x61], &0i64.to_be_bytes()));               // DateUTC=0 → 2001
+    p.extend_from_slice(&ebml_elem(&[0x44, 0x89], &5000.0f64.to_be_bytes())); // Duration
+    p.extend_from_slice(&ebml_elem(&[0x44, 0x61], &0i64.to_be_bytes())); // DateUTC=0 → 2001
     ebml_elem(&[0x15, 0x49, 0xA9, 0x66], &p)
 }
 
@@ -648,9 +670,9 @@ pub fn fixture_ebml_unknown_size_segment() -> Vec<u8> {
 pub fn qt_meta_with_keys_local(keys_and_vals: &[(&str, &[u8])]) -> Vec<u8> {
     let mut hdlr = Vec::new();
     hdlr.extend_from_slice(&[0u8; 8]); // version/flags + pre_defined
-    hdlr.extend_from_slice(b"mdta");   // handler_type
+    hdlr.extend_from_slice(b"mdta"); // handler_type
     hdlr.extend_from_slice(&[0u8; 12]); // reserved(3*4)
-    hdlr.push(0);                       // name 空
+    hdlr.push(0); // name 空
 
     let mut keys_payload = Vec::new();
     keys_payload.extend_from_slice(&[0u8; 4]); // version/flags
@@ -743,10 +765,10 @@ pub fn build_jpeg_with_gps_ifd() -> Vec<u8> {
     t.extend_from_slice(&1u16.to_le_bytes()); // entry count
     // Entry: tag=0x8825(GPS IFD), type=4(LONG), count=1, value=26(GPS IFD offset)
     t.extend_from_slice(&0x8825u16.to_le_bytes());
-    t.extend_from_slice(&4u16.to_le_bytes());  // LONG
-    t.extend_from_slice(&1u32.to_le_bytes());  // count
+    t.extend_from_slice(&4u16.to_le_bytes()); // LONG
+    t.extend_from_slice(&1u32.to_le_bytes()); // count
     t.extend_from_slice(&26u32.to_le_bytes()); // → GPS IFD at 26
-    t.extend_from_slice(&0u32.to_le_bytes());  // next IFD = 0
+    t.extend_from_slice(&0u32.to_le_bytes()); // next IFD = 0
     // IFD0 ends at 8 + 2 + 12 + 4 = 26 ✓
 
     // GPS IFD @26: 4 entries
@@ -758,27 +780,27 @@ pub fn build_jpeg_with_gps_ifd() -> Vec<u8> {
 
     // Entry 1: GPSLatitudeRef (0x0001), ASCII, count=2, inline value "N\0"
     t.extend_from_slice(&0x0001u16.to_le_bytes());
-    t.extend_from_slice(&2u16.to_le_bytes());  // ASCII
-    t.extend_from_slice(&2u32.to_le_bytes());  // count (includes NUL)
-    t.extend_from_slice(b"N\0\0\0");           // inline (LE, padded to 4)
+    t.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+    t.extend_from_slice(&2u32.to_le_bytes()); // count (includes NUL)
+    t.extend_from_slice(b"N\0\0\0"); // inline (LE, padded to 4)
 
     // Entry 2: GPSLatitude (0x0002), RATIONAL, count=3, data at lat_data_offset
     t.extend_from_slice(&0x0002u16.to_le_bytes());
-    t.extend_from_slice(&5u16.to_le_bytes());              // RATIONAL
-    t.extend_from_slice(&3u32.to_le_bytes());              // count
-    t.extend_from_slice(&lat_data_offset.to_le_bytes());   // offset
+    t.extend_from_slice(&5u16.to_le_bytes()); // RATIONAL
+    t.extend_from_slice(&3u32.to_le_bytes()); // count
+    t.extend_from_slice(&lat_data_offset.to_le_bytes()); // offset
 
     // Entry 3: GPSLongitudeRef (0x0003), ASCII, count=2, inline value "E\0"
     t.extend_from_slice(&0x0003u16.to_le_bytes());
-    t.extend_from_slice(&2u16.to_le_bytes());  // ASCII
-    t.extend_from_slice(&2u32.to_le_bytes());  // count
-    t.extend_from_slice(b"E\0\0\0");           // inline (LE, padded to 4)
+    t.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+    t.extend_from_slice(&2u32.to_le_bytes()); // count
+    t.extend_from_slice(b"E\0\0\0"); // inline (LE, padded to 4)
 
     // Entry 4: GPSLongitude (0x0004), RATIONAL, count=3, data at lon_data_offset
     t.extend_from_slice(&0x0004u16.to_le_bytes());
-    t.extend_from_slice(&5u16.to_le_bytes());              // RATIONAL
-    t.extend_from_slice(&3u32.to_le_bytes());              // count
-    t.extend_from_slice(&lon_data_offset.to_le_bytes());   // offset
+    t.extend_from_slice(&5u16.to_le_bytes()); // RATIONAL
+    t.extend_from_slice(&3u32.to_le_bytes()); // count
+    t.extend_from_slice(&lon_data_offset.to_le_bytes()); // offset
 
     t.extend_from_slice(&0u32.to_le_bytes()); // GPS IFD next = 0
     // GPS IFD ends at 26 + 2 + 48 + 4 = 80 ✓
@@ -859,7 +881,10 @@ pub fn fixture_bmff_mp4_container_tags() -> Vec<u8> {
     ]);
 
     let mut moov_p = Vec::new();
-    moov_p.extend_from_slice(&bmff_box(b"mvhd", &mp4_mvhd_v0(2_082_844_800, 600, 900_900)));
+    moov_p.extend_from_slice(&bmff_box(
+        b"mvhd",
+        &mp4_mvhd_v0(2_082_844_800, 600, 900_900),
+    ));
     moov_p.extend_from_slice(&bmff_box(b"udta", &udta));
     moov_p.extend_from_slice(&bmff_box(b"meta", &meta));
     let moov = bmff_box(b"moov", &moov_p);
@@ -1077,10 +1102,19 @@ mod tests {
     fn warnings_not_compared_across_adapters() {
         // warnings 是 best-effort 诊断，不参与跨适配器比较：种类、存在性差异均不算分歧。
         let none = meta_with_warnings(vec![]);
-        let trunc = meta_with_warnings(vec![Warning { offset: 1, kind: WarnKind::Truncated }]);
-        let unreach = meta_with_warnings(vec![Warning { offset: 9, kind: WarnKind::UnreachableSection }]);
+        let trunc = meta_with_warnings(vec![Warning {
+            offset: 1,
+            kind: WarnKind::Truncated,
+        }]);
+        let unreach = meta_with_warnings(vec![Warning {
+            offset: 9,
+            kind: WarnKind::UnreachableSection,
+        }]);
         assert!(metadata_agree(&none, &trunc), "warning 存在性差异不算分歧");
-        assert!(metadata_agree(&trunc, &unreach), "warning 种类/偏移差异不算分歧");
+        assert!(
+            metadata_agree(&trunc, &unreach),
+            "warning 种类/偏移差异不算分歧"
+        );
     }
 
     #[test]

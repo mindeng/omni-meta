@@ -30,16 +30,28 @@ impl MetaParser for WebpParser {
     fn pull<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
         let mut events: Vec<Event<'a>> = Vec::new();
         if self.done {
-            return PullResult { demand: Demand::Done, consumed: 0, events };
+            return PullResult {
+                demand: Demand::Done,
+                consumed: 0,
+                events,
+            };
         }
         let mut pos = 0usize;
         if !self.saw_header {
             if input.len() < 12 {
-                return PullResult { demand: Demand::NeedBytes(12), consumed: 0, events };
+                return PullResult {
+                    demand: Demand::NeedBytes(12),
+                    consumed: 0,
+                    events,
+                };
             }
             if &input[0..4] != b"RIFF" || &input[8..12] != b"WEBP" {
                 self.done = true;
-                return PullResult { demand: Demand::Done, consumed: 0, events };
+                return PullResult {
+                    demand: Demand::Done,
+                    consumed: 0,
+                    events,
+                };
             }
             let filesize = u32::from_le_bytes([input[4], input[5], input[6], input[7]]) as u64;
             // RIFF filesize covers "WEBP" (4) + all chunks.
@@ -53,18 +65,28 @@ impl MetaParser for WebpParser {
             // Stop when we've consumed all chunks within the RIFF container.
             if let Some(0) = self.riff_remaining {
                 self.done = true;
-                return PullResult { demand: Demand::Done, consumed: pos, events };
+                return PullResult {
+                    demand: Demand::Done,
+                    consumed: pos,
+                    events,
+                };
             }
 
             let rest = &input[pos..];
             if rest.len() < 8 {
-                return PullResult { demand: Demand::NeedBytes(8), consumed: pos, events };
+                return PullResult {
+                    demand: Demand::NeedBytes(8),
+                    consumed: pos,
+                    events,
+                };
             }
             let fourcc = &rest[0..4];
             let size = u32::from_le_bytes([rest[4], rest[5], rest[6], rest[7]]) as usize;
             let pad = size & 1;
             // Total bytes this chunk occupies: 8-byte header + size + pad.
-            let chunk_total = (8u64).saturating_add(size as u64).saturating_add(pad as u64);
+            let chunk_total = (8u64)
+                .saturating_add(size as u64)
+                .saturating_add(pad as u64);
 
             // 维度 chunk：只需小前缀即可读出，读后 Skip 整个 data+pad。
             let dim_prefix = match fourcc {
@@ -76,7 +98,11 @@ impl MetaParser for WebpParser {
             if let Some(prefix) = dim_prefix {
                 let need = 8 + prefix.min(size);
                 if rest.len() < need {
-                    return PullResult { demand: Demand::NeedBytes(need), consumed: pos, events };
+                    return PullResult {
+                        demand: Demand::NeedBytes(need),
+                        consumed: pos,
+                        events,
+                    };
                 }
                 let data = &rest[8..8 + prefix.min(size)];
                 read_dimensions(fourcc, data, &mut events);
@@ -85,7 +111,11 @@ impl MetaParser for WebpParser {
                 if let Some(rem) = self.riff_remaining.as_mut() {
                     *rem = rem.saturating_sub(chunk_total);
                 }
-                return PullResult { demand: Demand::Skip(skip), consumed: pos + 8, events };
+                return PullResult {
+                    demand: Demand::Skip(skip),
+                    consumed: pos + 8,
+                    events,
+                };
             }
 
             // 元数据 chunk：须整读 data。
@@ -94,11 +124,19 @@ impl MetaParser for WebpParser {
                     Some(v) => v,
                     None => {
                         self.done = true;
-                        return PullResult { demand: Demand::Done, consumed: pos, events };
+                        return PullResult {
+                            demand: Demand::Done,
+                            consumed: pos,
+                            events,
+                        };
                     }
                 };
                 if rest.len() < need {
-                    return PullResult { demand: Demand::NeedBytes(need), consumed: pos, events };
+                    return PullResult {
+                        demand: Demand::NeedBytes(need),
+                        consumed: pos,
+                        events,
+                    };
                 }
                 let mut data = &rest[8..8 + size];
                 let kind = if fourcc == b"EXIF" {
@@ -117,7 +155,11 @@ impl MetaParser for WebpParser {
                     *rem = rem.saturating_sub(chunk_total);
                 }
                 if skip > 0 {
-                    return PullResult { demand: Demand::Skip(skip), consumed: pos + need, events };
+                    return PullResult {
+                        demand: Demand::Skip(skip),
+                        consumed: pos + need,
+                        events,
+                    };
                 }
                 pos += need;
                 continue;
@@ -128,7 +170,11 @@ impl MetaParser for WebpParser {
             if let Some(rem) = self.riff_remaining.as_mut() {
                 *rem = rem.saturating_sub(chunk_total);
             }
-            return PullResult { demand: Demand::Skip(skip), consumed: pos + 8, events };
+            return PullResult {
+                demand: Demand::Skip(skip),
+                consumed: pos + 8,
+                events,
+            };
         }
     }
 }
@@ -215,7 +261,12 @@ mod tests {
         let meta = crate::driver::finalize(col, crate::model::FileFormat::Webp);
         assert_eq!(meta.unified.width, Some(640));
         assert_eq!(meta.unified.height, Some(480));
-        assert!(meta.raw.xmp.iter().any(|x| x.name == "Make" && x.value == "Acme"));
+        assert!(
+            meta.raw
+                .xmp
+                .iter()
+                .any(|x| x.name == "Make" && x.value == "Acme")
+        );
     }
 
     #[test]

@@ -3,7 +3,10 @@
 
 use alloc::vec::Vec;
 
-use crate::containers::ebml::{iter_child_elements, needed_header_bytes, read_element_header, read_float, read_int, read_uint, ElemHeader};
+use crate::containers::ebml::{
+    ElemHeader, iter_child_elements, needed_header_bytes, read_element_header, read_float,
+    read_int, read_uint,
+};
 use crate::demand::{Demand, Event, MetaParser, PullResult};
 use crate::model::{DateTimeParts, Field, WarnKind, Warning};
 
@@ -59,7 +62,11 @@ fn parse_info(payload: &[u8]) -> InfoData {
             _ => {}
         }
     }
-    let mut out = InfoData { duration_ms: None, created: None, invalid: false };
+    let mut out = InfoData {
+        duration_ms: None,
+        created: None,
+        invalid: false,
+    };
     let scale = scale.unwrap_or(1_000_000);
     if let Some(d) = duration_raw {
         if scale == 0 || !d.is_finite() || d < 0.0 {
@@ -135,7 +142,13 @@ pub struct EbmlParser {
 
 impl Default for EbmlParser {
     fn default() -> Self {
-        Self { done: false, phase: Phase::TopLevel, got_info: false, got_tracks: false, pos: 0 }
+        Self {
+            done: false,
+            phase: Phase::TopLevel,
+            got_info: false,
+            got_tracks: false,
+            pos: 0,
+        }
     }
 }
 
@@ -146,11 +159,19 @@ impl EbmlParser {
 }
 
 fn done_result<'a>() -> PullResult<'a> {
-    PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() }
+    PullResult {
+        demand: Demand::Done,
+        consumed: 0,
+        events: Vec::new(),
+    }
 }
 
 fn need_result<'a>(n: usize) -> PullResult<'a> {
-    PullResult { demand: Demand::NeedBytes(n), consumed: 0, events: Vec::new() }
+    PullResult {
+        demand: Demand::NeedBytes(n),
+        consumed: 0,
+        events: Vec::new(),
+    }
 }
 
 impl MetaParser for EbmlParser {
@@ -189,12 +210,23 @@ impl EbmlParser {
             self.phase = Phase::InSegment;
             self.pos = self.pos.saturating_add(header_len as u64);
             // 仅消费 Segment 头，索要首个子元素头（最小 2 字节）。
-            return PullResult { demand: Demand::NeedBytes(2), consumed: header_len, events: Vec::new() };
+            return PullResult {
+                demand: Demand::NeedBytes(2),
+                consumed: header_len,
+                events: Vec::new(),
+            };
         }
         match hdr.size {
             Some(sz) => {
-                self.pos = self.pos.saturating_add(header_len as u64).saturating_add(sz);
-                PullResult { demand: Demand::Skip(sz), consumed: header_len, events: Vec::new() }
+                self.pos = self
+                    .pos
+                    .saturating_add(header_len as u64)
+                    .saturating_add(sz);
+                PullResult {
+                    demand: Demand::Skip(sz),
+                    consumed: header_len,
+                    events: Vec::new(),
+                }
             }
             None => {
                 // 未知大小且非 Segment → 不可能再有 Segment，干净结束。
@@ -205,7 +237,12 @@ impl EbmlParser {
     }
 
     /// Segment 内：缓冲并解析 Info/Tracks；跳过定长不关心元素；遇未知大小媒体即停止。
-    fn step_segment<'a>(&mut self, input: &'a [u8], hdr: &ElemHeader, header_len: usize) -> PullResult<'a> {
+    fn step_segment<'a>(
+        &mut self,
+        input: &'a [u8],
+        hdr: &ElemHeader,
+        header_len: usize,
+    ) -> PullResult<'a> {
         let sz = match hdr.size {
             Some(s) => s,
             None => {
@@ -218,16 +255,30 @@ impl EbmlParser {
                     offset: self.pos,
                     kind: WarnKind::UnreachableSection,
                 })];
-                return PullResult { demand: Demand::Done, consumed: 0, events };
+                return PullResult {
+                    demand: Demand::Done,
+                    consumed: 0,
+                    events,
+                };
             }
         };
         let wanted = hdr.id == INFO || hdr.id == TRACKS;
         if !wanted {
-            self.pos = self.pos.saturating_add(header_len as u64).saturating_add(sz);
-            return PullResult { demand: Demand::Skip(sz), consumed: header_len, events: Vec::new() };
+            self.pos = self
+                .pos
+                .saturating_add(header_len as u64)
+                .saturating_add(sz);
+            return PullResult {
+                demand: Demand::Skip(sz),
+                consumed: header_len,
+                events: Vec::new(),
+            };
         }
         // 关心的元素：须整元素入窗。
-        let total = match usize::try_from(sz).ok().and_then(|s| header_len.checked_add(s)) {
+        let total = match usize::try_from(sz)
+            .ok()
+            .and_then(|s| header_len.checked_add(s))
+        {
             Some(t) => t,
             None => {
                 self.done = true;
@@ -248,7 +299,10 @@ impl EbmlParser {
                 events.push(Event::Field(Field::Created(dt)));
             }
             if info.invalid {
-                events.push(Event::Warning(Warning { offset: self.pos, kind: WarnKind::UnrecognizedValue }));
+                events.push(Event::Warning(Warning {
+                    offset: self.pos,
+                    kind: WarnKind::UnrecognizedValue,
+                }));
             }
             self.got_info = true;
         } else {
@@ -261,9 +315,17 @@ impl EbmlParser {
         self.pos = self.pos.saturating_add(total as u64);
         if self.got_info && self.got_tracks {
             self.done = true;
-            return PullResult { demand: Demand::Done, consumed: total, events };
+            return PullResult {
+                demand: Demand::Done,
+                consumed: total,
+                events,
+            };
         }
-        PullResult { demand: Demand::NeedBytes(2), consumed: total, events }
+        PullResult {
+            demand: Demand::NeedBytes(2),
+            consumed: total,
+            events,
+        }
     }
 }
 
@@ -282,7 +344,10 @@ mod tests {
 
     /// 构造完整 MKV/WebM：EBML头 + Segment{ Info, Tracks, Cluster }。
     fn full_ebml(doctype: &[u8], w: u32, h: u32, dur: f64, date_ns: i64) -> Vec<u8> {
-        let info = elem(&[0x15, 0x49, 0xA9, 0x66], &info_payload(Some(1_000_000), Some(dur), Some(date_ns)));
+        let info = elem(
+            &[0x15, 0x49, 0xA9, 0x66],
+            &info_payload(Some(1_000_000), Some(dur), Some(date_ns)),
+        );
         let tracks = elem(&[0x16, 0x54, 0xAE, 0x6B], &video_track(w, h));
         let cluster = elem(&[0x1F, 0x43, 0xB6, 0x75], &[0u8; 8]);
         let mut seg_children = Vec::new();
@@ -297,7 +362,11 @@ mod tests {
     #[test]
     fn end_to_end_webm_slice() {
         let buf = full_ebml(b"webm", 1280, 720, 5000.0, 0);
-        let col = crate::driver::drive_slice(&buf, &mut EbmlParser::new(), crate::limits::Limits::default());
+        let col = crate::driver::drive_slice(
+            &buf,
+            &mut EbmlParser::new(),
+            crate::limits::Limits::default(),
+        );
         let meta = crate::driver::finalize(col, crate::model::FileFormat::Webm);
         assert!(meta.warnings.is_empty(), "warnings: {:?}", meta.warnings);
         assert_eq!(meta.unified.width, Some(1280));
@@ -327,8 +396,16 @@ mod tests {
         cluster.extend_from_slice(&[0u8; 4]);
         let mut f = doctype_header(b"webm");
         f.extend_from_slice(&segment(&cluster));
-        let col = crate::driver::drive_slice(&f, &mut EbmlParser::new(), crate::limits::Limits::default());
-        assert!(col.warnings.iter().any(|w| w.kind == crate::model::WarnKind::UnreachableSection));
+        let col = crate::driver::drive_slice(
+            &f,
+            &mut EbmlParser::new(),
+            crate::limits::Limits::default(),
+        );
+        assert!(
+            col.warnings
+                .iter()
+                .any(|w| w.kind == crate::model::WarnKind::UnreachableSection)
+        );
     }
 
     #[test]
@@ -341,8 +418,16 @@ mod tests {
         info.extend_from_slice(&[0u8; 8]); // 实际仅 8
         let mut f = doctype_header(b"webm");
         f.extend_from_slice(&segment(&info));
-        let col = crate::driver::drive_slice(&f, &mut EbmlParser::new(), crate::limits::Limits::default());
-        assert!(col.warnings.iter().any(|w| w.kind == crate::model::WarnKind::Truncated));
+        let col = crate::driver::drive_slice(
+            &f,
+            &mut EbmlParser::new(),
+            crate::limits::Limits::default(),
+        );
+        assert!(
+            col.warnings
+                .iter()
+                .any(|w| w.kind == crate::model::WarnKind::Truncated)
+        );
     }
 
     #[test]
@@ -415,7 +500,7 @@ mod tests {
         // 4 字节 f32 Duration = 2500.0；默认 scale 缺省时用显式 scale。
         let mut p = Vec::new();
         p.extend_from_slice(&elem(&[0x2A, 0xD7, 0xB1], &1_000_000u64.to_be_bytes())); // TimestampScale
-        p.extend_from_slice(&elem(&[0x44, 0x89], &2500.0f32.to_be_bytes()));          // 4 字节 Duration
+        p.extend_from_slice(&elem(&[0x44, 0x89], &2500.0f32.to_be_bytes())); // 4 字节 Duration
         let info = parse_info(&p);
         assert_eq!(info.duration_ms, Some(2500));
         assert!(!info.invalid);
@@ -453,7 +538,7 @@ mod tests {
     #[test]
     fn parse_tracks_picks_first_video() {
         let mut tracks = Vec::new();
-        tracks.extend_from_slice(&audio_track());          // 音频轨在前
+        tracks.extend_from_slice(&audio_track()); // 音频轨在前
         tracks.extend_from_slice(&video_track(1280, 720)); // 视频轨
         assert_eq!(parse_tracks(&tracks), Some((1280, 720)));
     }

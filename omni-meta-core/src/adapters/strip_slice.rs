@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use crate::error::Error;
 use crate::probe::probe;
-use crate::strip::{drive_strip_slice, planner_for, StripOptions, StripReport};
+use crate::strip::{StripOptions, StripReport, drive_strip_slice, planner_for};
 
 /// 从一整块内存缓冲剥离元数据，返回（干净字节, 报告）。
 /// 无法识别格式 → `UnrecognizedFormat`；已识别但不支持 → `Unsupported`。

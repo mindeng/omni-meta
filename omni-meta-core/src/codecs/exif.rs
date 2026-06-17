@@ -11,29 +11,33 @@ use crate::limits::Limits;
 use crate::model::{ExifTag, IfdKind, Value, WarnKind, Warning};
 
 /// 解码一段 TIFF 字节（即 APP1 "Exif\0\0" 之后的内容）。
-pub fn decode(
-    tiff: &[u8],
-    out: &mut Vec<ExifTag>,
-    warnings: &mut Vec<Warning>,
-    limits: &Limits,
-) {
+pub fn decode(tiff: &[u8], out: &mut Vec<ExifTag>, warnings: &mut Vec<Warning>, limits: &Limits) {
     let mut cur = ByteCursor::new(tiff);
     let endian = match cur.take(2) {
         Some(s) if s == b"II" => Endian::Little,
         Some(s) if s == b"MM" => Endian::Big,
         _ => {
-            warnings.push(Warning { offset: 0, kind: WarnKind::BadExifHeader });
+            warnings.push(Warning {
+                offset: 0,
+                kind: WarnKind::BadExifHeader,
+            });
             return;
         }
     };
     if cur.u16(endian) != Some(42) {
-        warnings.push(Warning { offset: 2, kind: WarnKind::BadExifHeader });
+        warnings.push(Warning {
+            offset: 2,
+            kind: WarnKind::BadExifHeader,
+        });
         return;
     }
     let ifd0 = match cur.u32(endian) {
         Some(v) => v as usize,
         None => {
-            warnings.push(Warning { offset: 4, kind: WarnKind::BadExifHeader });
+            warnings.push(Warning {
+                offset: 4,
+                kind: WarnKind::BadExifHeader,
+            });
             return;
         }
     };
@@ -66,13 +70,19 @@ fn parse_ifd(
 ) {
     let mut cur = ByteCursor::new(tiff);
     if cur.seek(off).is_none() {
-        warnings.push(Warning { offset: off as u64, kind: WarnKind::BadExifHeader });
+        warnings.push(Warning {
+            offset: off as u64,
+            kind: WarnKind::BadExifHeader,
+        });
         return;
     }
     let count = match cur.u16(e) {
         Some(c) => c,
         None => {
-            warnings.push(Warning { offset: off as u64, kind: WarnKind::Truncated });
+            warnings.push(Warning {
+                offset: off as u64,
+                kind: WarnKind::Truncated,
+            });
             return;
         }
     };
@@ -108,7 +118,11 @@ fn parse_ifd(
             continue;
         }
         if let Some(val) = read_value(tiff, e, typ, cnt, valoff, limits.max_payload_bytes) {
-            out.push(ExifTag { ifd: kind, tag, value: val });
+            out.push(ExifTag {
+                ifd: kind,
+                tag,
+                value: val,
+            });
         }
     }
     // next-IFD 仅由 Primary 跟随 → IFD1(Thumbnail)。用显式偏移定位 next 字段,
@@ -275,8 +289,22 @@ mod tests {
         decode(&tiff, &mut out, &mut warns, &Limits::default());
         assert!(warns.is_empty(), "unexpected warnings: {:?}", warns);
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0], ExifTag { ifd: IfdKind::Primary, tag: 0x010F, value: Value::Text(String::from("Acme")) });
-        assert_eq!(out[1], ExifTag { ifd: IfdKind::Primary, tag: 0x0112, value: Value::U16(6) });
+        assert_eq!(
+            out[0],
+            ExifTag {
+                ifd: IfdKind::Primary,
+                tag: 0x010F,
+                value: Value::Text(String::from("Acme"))
+            }
+        );
+        assert_eq!(
+            out[1],
+            ExifTag {
+                ifd: IfdKind::Primary,
+                tag: 0x0112,
+                value: Value::U16(6)
+            }
+        );
     }
 
     #[test]
@@ -322,8 +350,22 @@ mod tests {
         decode(&tiff, &mut out, &mut warns, &Limits::default());
         assert!(warns.is_empty(), "unexpected warnings: {:?}", warns);
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0], ExifTag { ifd: IfdKind::Primary, tag: 0x010F, value: Value::Text(String::from("Acme")) });
-        assert_eq!(out[1], ExifTag { ifd: IfdKind::Primary, tag: 0x0112, value: Value::U16(6) });
+        assert_eq!(
+            out[0],
+            ExifTag {
+                ifd: IfdKind::Primary,
+                tag: 0x010F,
+                value: Value::Text(String::from("Acme"))
+            }
+        );
+        assert_eq!(
+            out[1],
+            ExifTag {
+                ifd: IfdKind::Primary,
+                tag: 0x0112,
+                value: Value::U16(6)
+            }
+        );
     }
 
     #[test]
@@ -331,7 +373,10 @@ mod tests {
         let tiff = tiff_fixture();
         let mut out = Vec::new();
         let mut warns = Vec::new();
-        let limits = Limits { max_tags: 1, ..Limits::default() };
+        let limits = Limits {
+            max_tags: 1,
+            ..Limits::default()
+        };
         decode(&tiff, &mut out, &mut warns, &limits);
         assert_eq!(out.len(), 1); // 第二个标签被上界截断
     }
@@ -439,7 +484,10 @@ mod tests {
         let t = tiff_one(0x0212, 3, 2, [2, 0, 3, 0], &[]);
         let (out, _) = decode_one(&t);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].value, Value::List(Vec::from([Value::U16(2), Value::U16(3)])));
+        assert_eq!(
+            out[0].value,
+            Value::List(Vec::from([Value::U16(2), Value::U16(3)]))
+        );
     }
 
     #[test]
@@ -580,7 +628,10 @@ mod tests {
         let t = tiff_with_exif_subifd();
         let mut out = Vec::new();
         let mut warns = Vec::new();
-        let limits = Limits { max_ifds: 1, ..Limits::default() };
+        let limits = Limits {
+            max_ifds: 1,
+            ..Limits::default()
+        };
         decode(&t, &mut out, &mut warns, &limits);
         assert!(out.is_empty());
     }

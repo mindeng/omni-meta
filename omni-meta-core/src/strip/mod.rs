@@ -63,14 +63,22 @@ pub struct StripOptions {
 
 impl Default for StripOptions {
     fn default() -> Self {
-        Self { limits: Limits::default(), keep_icc: true, keep_orientation: true }
+        Self {
+            limits: Limits::default(),
+            keep_icc: true,
+            keep_orientation: true,
+        }
     }
 }
 
 impl StripOptions {
     /// 隐私极端模式：连 ICC/orientation 一并删除（可能偏色/翻车）。
     pub fn aggressive() -> Self {
-        Self { keep_icc: false, keep_orientation: false, ..Self::default() }
+        Self {
+            keep_icc: false,
+            keep_orientation: false,
+            ..Self::default()
+        }
     }
 }
 
@@ -213,18 +221,28 @@ mod tests {
                     consumed: 5,
                     cmds: alloc::vec![
                         StripCmd::Emit(2),
-                        StripCmd::Drop { len: 3, kind: RemovedKind::Exif },
+                        StripCmd::Drop {
+                            len: 3,
+                            kind: RemovedKind::Exif
+                        },
                         StripCmd::Insert(alloc::vec![0xAA]),
                     ],
                 },
                 2 => StripResult {
                     demand: StripDemand::More,
                     consumed: 2,
-                    cmds: alloc::vec![StripCmd::Replace { consume: 2, with: alloc::vec![0xBB] }],
+                    cmds: alloc::vec![StripCmd::Replace {
+                        consume: 2,
+                        with: alloc::vec![0xBB]
+                    }],
                 },
                 _ => {
                     let _ = input;
-                    StripResult { demand: StripDemand::Done, consumed: 0, cmds: alloc::vec![] }
+                    StripResult {
+                        demand: StripDemand::Done,
+                        consumed: 0,
+                        cmds: alloc::vec![],
+                    }
                 }
             }
         }

@@ -71,8 +71,10 @@ mod tests {
         let mut warns = alloc::vec::Vec::new();
         crate::codecs::exif::decode(&tiff, &mut tags, &mut warns, &Limits::default());
         assert!(warns.is_empty(), "warns: {:?}", warns);
-        assert!(tags.iter().any(|t| t.tag == 0x0112
-            && t.value == crate::model::Value::U16(6)));
+        assert!(
+            tags.iter()
+                .any(|t| t.tag == 0x0112 && t.value == crate::model::Value::U16(6))
+        );
     }
 
     #[test]
@@ -95,7 +97,10 @@ mod tests {
         assert_eq!(&chunk[4..8], b"eXIf");
         let crc_off = 8 + tiff.len();
         let crc = u32::from_be_bytes([
-            chunk[crc_off], chunk[crc_off + 1], chunk[crc_off + 2], chunk[crc_off + 3],
+            chunk[crc_off],
+            chunk[crc_off + 1],
+            chunk[crc_off + 2],
+            chunk[crc_off + 3],
         ]);
         // CRC 覆盖 type + data
         let mut crc_input = alloc::vec::Vec::new();

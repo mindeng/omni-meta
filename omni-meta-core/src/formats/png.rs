@@ -25,16 +25,28 @@ impl MetaParser for PngParser {
     fn pull<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
         let mut events: Vec<Event<'a>> = Vec::new();
         if self.done {
-            return PullResult { demand: Demand::Done, consumed: 0, events };
+            return PullResult {
+                demand: Demand::Done,
+                consumed: 0,
+                events,
+            };
         }
         let mut pos = 0usize;
         if !self.saw_sig {
             if input.len() < 8 {
-                return PullResult { demand: Demand::NeedBytes(8), consumed: 0, events };
+                return PullResult {
+                    demand: Demand::NeedBytes(8),
+                    consumed: 0,
+                    events,
+                };
             }
             if input[..8] != SIG {
                 self.done = true;
-                return PullResult { demand: Demand::Done, consumed: 0, events };
+                return PullResult {
+                    demand: Demand::Done,
+                    consumed: 0,
+                    events,
+                };
             }
             self.saw_sig = true;
             pos = 8;
@@ -43,14 +55,22 @@ impl MetaParser for PngParser {
         loop {
             let rest = &input[pos..];
             if rest.len() < 8 {
-                return PullResult { demand: Demand::NeedBytes(8), consumed: pos, events };
+                return PullResult {
+                    demand: Demand::NeedBytes(8),
+                    consumed: pos,
+                    events,
+                };
             }
             let len = u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
             let ctype = &rest[4..8];
 
             if ctype == b"IEND" {
                 self.done = true;
-                return PullResult { demand: Demand::Done, consumed: pos + 8, events };
+                return PullResult {
+                    demand: Demand::Done,
+                    consumed: pos + 8,
+                    events,
+                };
             }
 
             let is_meta = ctype == b"IHDR" || ctype == b"eXIf" || ctype == b"iTXt";
@@ -61,11 +81,19 @@ impl MetaParser for PngParser {
                     None => {
                         // 长度溢出 → 当作不可读，跳过数据+crc
                         self.done = true;
-                        return PullResult { demand: Demand::Done, consumed: pos, events };
+                        return PullResult {
+                            demand: Demand::Done,
+                            consumed: pos,
+                            events,
+                        };
                     }
                 };
                 if rest.len() < need {
-                    return PullResult { demand: Demand::NeedBytes(need), consumed: pos, events };
+                    return PullResult {
+                        demand: Demand::NeedBytes(need),
+                        consumed: pos,
+                        events,
+                    };
                 }
                 let data = &rest[8..8 + len];
                 match ctype {
@@ -78,7 +106,10 @@ impl MetaParser for PngParser {
                         }
                     }
                     b"eXIf" => {
-                        events.push(Event::Payload { kind: PayloadKind::Exif, data });
+                        events.push(Event::Payload {
+                            kind: PayloadKind::Exif,
+                            data,
+                        });
                     }
                     b"iTXt" => {
                         handle_itxt(data, &mut events);
@@ -91,7 +122,11 @@ impl MetaParser for PngParser {
 
             // 可跳过 chunk：消费 8 字节头，Skip(data + crc)
             let skip = (len as u64).saturating_add(4);
-            return PullResult { demand: Demand::Skip(skip), consumed: pos + 8, events };
+            return PullResult {
+                demand: Demand::Skip(skip),
+                consumed: pos + 8,
+                events,
+            };
         }
     }
 }
@@ -130,7 +165,10 @@ fn handle_itxt<'a>(data: &'a [u8], events: &mut Vec<Event<'a>>) {
         None => return,
     };
     let text = &rest2[tk_end + 1..];
-    events.push(Event::Payload { kind: PayloadKind::Xmp, data: text });
+    events.push(Event::Payload {
+        kind: PayloadKind::Xmp,
+        data: text,
+    });
 }
 
 #[cfg(test)]
@@ -186,13 +224,24 @@ mod tests {
     #[test]
     fn extracts_dimensions_exif_xmp() {
         let col = collect(&full_png());
-        assert!(col.warnings.iter().all(|w| w.kind == WarnKind::BadExifHeader), "warnings: {:?}", col.warnings);
+        assert!(
+            col.warnings
+                .iter()
+                .all(|w| w.kind == WarnKind::BadExifHeader),
+            "warnings: {:?}",
+            col.warnings
+        );
         // eXIf 载荷被送入 exif::decode（占位 TIFF → BadExifHeader? 不，3 字节非 II/MM → 告警）
         // 为避免 EXIF 解码噪声，这里只断言 XMP 与维度经由 finalize。
         let meta = crate::driver::finalize(col, crate::model::FileFormat::Png);
         assert_eq!(meta.unified.width, Some(1920));
         assert_eq!(meta.unified.height, Some(1080));
-        assert!(meta.raw.xmp.iter().any(|x| x.prefix == "tiff" && x.name == "Make" && x.value == "Acme"));
+        assert!(
+            meta.raw
+                .xmp
+                .iter()
+                .any(|x| x.prefix == "tiff" && x.name == "Make" && x.value == "Acme")
+        );
     }
 
     #[test]
@@ -203,7 +252,11 @@ mod tests {
         p.extend_from_slice(&itxt_xmp(b"ignored", true)); // compressed
         p.extend_from_slice(&chunk(b"IEND", &[]));
         let col = collect(&p);
-        assert!(col.warnings.iter().any(|w| w.kind == WarnKind::CompressedChunkSkipped));
+        assert!(
+            col.warnings
+                .iter()
+                .any(|w| w.kind == WarnKind::CompressedChunkSkipped)
+        );
         assert!(col.xmp.is_empty());
     }
 

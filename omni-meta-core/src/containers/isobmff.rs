@@ -36,13 +36,25 @@ pub fn read_box_header(input: &[u8]) -> Option<BoxHeader> {
                 return None;
             }
             let large = u64::from_be_bytes([
-                input[8], input[9], input[10], input[11],
-                input[12], input[13], input[14], input[15],
+                input[8], input[9], input[10], input[11], input[12], input[13], input[14],
+                input[15],
             ]);
-            Some(BoxHeader { kind, header_len: 16, total_size: Some(large) })
+            Some(BoxHeader {
+                kind,
+                header_len: 16,
+                total_size: Some(large),
+            })
         }
-        0 => Some(BoxHeader { kind, header_len: 8, total_size: None }),
-        n => Some(BoxHeader { kind, header_len: 8, total_size: Some(n as u64) }),
+        0 => Some(BoxHeader {
+            kind,
+            header_len: 8,
+            total_size: None,
+        }),
+        n => Some(BoxHeader {
+            kind,
+            header_len: 8,
+            total_size: Some(n as u64),
+        }),
     }
 }
 
@@ -52,7 +64,10 @@ pub fn full_box_vf(payload: &[u8]) -> Option<(u8, u32)> {
     if payload.len() < 4 {
         return None;
     }
-    Some((payload[0], u32::from_be_bytes([0, payload[1], payload[2], payload[3]])))
+    Some((
+        payload[0],
+        u32::from_be_bytes([0, payload[1], payload[2], payload[3]]),
+    ))
 }
 
 /// 从游标读大端无符号整数，size ∈ {0,4,8}（ISO-BMFF 可变位宽字段）。
@@ -63,7 +78,9 @@ pub fn read_uint_be(cur: &mut ByteCursor, size: u8) -> Option<u64> {
         4 => cur.u32(Endian::Big).map(u64::from),
         8 => {
             let s = cur.take(8)?;
-            Some(u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
+            Some(u64::from_be_bytes([
+                s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7],
+            ]))
         }
         _ => None,
     }
@@ -172,7 +189,7 @@ mod tests {
         let mut c = crate::cursor::ByteCursor::new(&buf);
         assert_eq!(read_uint_be(&mut c, 0), Some(0)); // 不消费
         assert_eq!(read_uint_be(&mut c, 4), Some(9)); // 消费 4
-        assert_eq!(read_uint_be(&mut c, 3), None);    // 非法位宽
+        assert_eq!(read_uint_be(&mut c, 3), None); // 非法位宽
         let big = [0, 0, 0, 0, 0, 0, 0, 7u8];
         let mut c2 = crate::cursor::ByteCursor::new(&big);
         assert_eq!(read_uint_be(&mut c2, 8), Some(7));
@@ -187,8 +204,9 @@ mod tests {
         buf.extend_from_slice(&12u32.to_be_bytes());
         buf.extend_from_slice(b"ftyp");
         buf.extend_from_slice(&[1, 2, 3, 4]);
-        let got: alloc::vec::Vec<([u8; 4], usize)> =
-            iter_child_boxes(&buf).map(|(h, p)| (h.kind, p.len())).collect();
+        let got: alloc::vec::Vec<([u8; 4], usize)> = iter_child_boxes(&buf)
+            .map(|(h, p)| (h.kind, p.len()))
+            .collect();
         assert_eq!(got, alloc::vec![(*b"free", 0usize), (*b"ftyp", 4usize)]);
 
         // 声明长度越界 → 停止（不产出残缺项）

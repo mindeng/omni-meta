@@ -1,6 +1,6 @@
 //! 端到端：从带 EXIF 的 JPEG 字节经公开 API 读出统一字段。
 
-use omni_meta::{read_slice, Error, FileFormat, Options, Orientation};
+use omni_meta::{Error, FileFormat, Options, Orientation, read_slice};
 
 /// 构造小端 TIFF：Make="Acme"(0x010F) + Orientation=6(0x0112)。
 fn make_tiff() -> Vec<u8> {

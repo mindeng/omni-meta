@@ -2,7 +2,10 @@
 
 use alloc::vec::Vec;
 
-use crate::model::{ContainerSource, DateTimeParts, Gps, IfdKind, Orientation, RawTags, Unified, Value, WarnKind, Warning};
+use crate::model::{
+    ContainerSource, DateTimeParts, Gps, IfdKind, Orientation, RawTags, Unified, Value, WarnKind,
+    Warning,
+};
 
 const TAG_MAKE: u16 = 0x010F;
 const TAG_MODEL: u16 = 0x0110;
@@ -50,7 +53,9 @@ fn dms_value_to_deg(v: &Value) -> Option<f64> {
     let mut scale = 1.0f64;
     let mut any = false;
     let mut acc = |n: u32, d: u32| -> Option<()> {
-        if d == 0 { return None; }
+        if d == 0 {
+            return None;
+        }
         deg += (n as f64 / d as f64) / scale;
         scale *= 60.0;
         any = true;
@@ -134,7 +139,11 @@ fn parse_xmp_coord(s: &str) -> Option<i32> {
     }
     let last = s.as_bytes()[s.len() - 1];
     let neg = matches!(last, b'S' | b'W' | b's' | b'w');
-    let core = if last.is_ascii_alphabetic() { &s[..s.len() - 1] } else { s };
+    let core = if last.is_ascii_alphabetic() {
+        &s[..s.len() - 1]
+    } else {
+        s
+    };
     let has_comma = core.as_bytes().contains(&b',');
     let mut parts = core.split(',');
     let first = parts.next()?;
@@ -166,12 +175,20 @@ fn gps_from_xmp(raw: &RawTags) -> Option<Gps> {
     };
     let lat = parse_xmp_coord(get("GPSLatitude")?)?;
     let lon = parse_xmp_coord(get("GPSLongitude")?)?;
-    Some(Gps { lat_e7: lat, lon_e7: lon, alt_mm: None })
+    Some(Gps {
+        lat_e7: lat,
+        lon_e7: lon,
+        alt_mm: None,
+    })
 }
 
 /// 从 EXIF GPS IFD 投影坐标。lat+lon 都成功才返回 Some；altitude 可选。
 fn gps_from_exif(raw: &RawTags) -> Option<Gps> {
-    let find = |tag: u16| raw.exif.iter().find(|t| t.ifd == IfdKind::Gps && t.tag == tag);
+    let find = |tag: u16| {
+        raw.exif
+            .iter()
+            .find(|t| t.ifd == IfdKind::Gps && t.tag == tag)
+    };
     let lat_v = find(GPS_LAT)?;
     let lon_v = find(GPS_LON)?;
     let mut lat = dms_value_to_deg(&lat_v.value)?;
@@ -207,13 +224,18 @@ fn gps_from_exif(raw: &RawTags) -> Option<Gps> {
             None
         }
     });
-    Some(Gps { lat_e7, lon_e7, alt_mm })
+    Some(Gps {
+        lat_e7,
+        lon_e7,
+        alt_mm,
+    })
 }
 
 /// 取指定来源/键的容器文本标签值。
 fn container_text<'a>(raw: &'a RawTags, source: ContainerSource, key: &str) -> Option<&'a str> {
     raw.container.iter().find_map(|t| {
-        if t.source == source && t.key == key
+        if t.source == source
+            && t.key == key
             && let Value::Text(s) = &t.value
         {
             return Some(s.as_str());
@@ -225,7 +247,8 @@ fn container_text<'a>(raw: &'a RawTags, source: ContainerSource, key: &str) -> O
 /// 取 Primary IFD 指定 tag 的文本值。
 fn exif_primary_text(raw: &RawTags, tag: u16) -> Option<alloc::string::String> {
     raw.exif.iter().find_map(|t| {
-        if t.ifd == IfdKind::Primary && t.tag == tag
+        if t.ifd == IfdKind::Primary
+            && t.tag == tag
             && let Value::Text(s) = &t.value
         {
             return Some(s.clone());
@@ -303,7 +326,8 @@ pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
     // 时区：默认 None；对应 OffsetTime* 标签存在则解析 "±HH:MM"。
     let find = |ifd: IfdKind, tag: u16| -> Option<&str> {
         raw.exif.iter().find_map(|t| {
-            if t.ifd == ifd && t.tag == tag
+            if t.ifd == ifd
+                && t.tag == tag
                 && let Value::Text(s) = &t.value
             {
                 return Some(s.as_str());
@@ -325,31 +349,43 @@ pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
         u.created = Some(dt);
     }
     // GPS：EXIF GPS IFD 优先。lat/lon 任一存在但整体无法合成 → UnrecognizedValue。
-    let has_gps_exif = raw.exif.iter().any(|t| {
-        t.ifd == IfdKind::Gps && (t.tag == GPS_LAT || t.tag == GPS_LON)
-    });
+    let has_gps_exif = raw
+        .exif
+        .iter()
+        .any(|t| t.ifd == IfdKind::Gps && (t.tag == GPS_LAT || t.tag == GPS_LON));
     if let Some(g) = gps_from_exif(raw) {
         u.gps = Some(g);
     } else {
         if has_gps_exif {
-            warnings.push(Warning { offset: 0, kind: WarnKind::UnrecognizedValue });
+            warnings.push(Warning {
+                offset: 0,
+                kind: WarnKind::UnrecognizedValue,
+            });
         }
         if let Some(g) = gps_from_xmp(raw) {
             u.gps = Some(g);
         }
     }
     // software：容器 > EXIF(0x0131) > XMP(xmp:CreatorTool)
-    u.software = container_text(raw, ContainerSource::QuickTimeMdta, "com.apple.quicktime.software")
-        .or_else(|| container_text(raw, ContainerSource::Udta, "©swr"))
-        .map(alloc::string::String::from)
-        .or_else(|| exif_primary_text(raw, TAG_SOFTWARE))
-        .or_else(|| xmp_text(raw, "xmp", "CreatorTool"));
+    u.software = container_text(
+        raw,
+        ContainerSource::QuickTimeMdta,
+        "com.apple.quicktime.software",
+    )
+    .or_else(|| container_text(raw, ContainerSource::Udta, "©swr"))
+    .map(alloc::string::String::from)
+    .or_else(|| exif_primary_text(raw, TAG_SOFTWARE))
+    .or_else(|| xmp_text(raw, "xmp", "CreatorTool"));
     // creator：容器 > EXIF(0x013B Artist) > XMP(dc:creator)
-    u.creator = container_text(raw, ContainerSource::QuickTimeMdta, "com.apple.quicktime.author")
-        .or_else(|| container_text(raw, ContainerSource::Udta, "©aut"))
-        .map(alloc::string::String::from)
-        .or_else(|| exif_primary_text(raw, TAG_ARTIST))
-        .or_else(|| xmp_text(raw, "dc", "creator"));
+    u.creator = container_text(
+        raw,
+        ContainerSource::QuickTimeMdta,
+        "com.apple.quicktime.author",
+    )
+    .or_else(|| container_text(raw, ContainerSource::Udta, "©aut"))
+    .map(alloc::string::String::from)
+    .or_else(|| exif_primary_text(raw, TAG_ARTIST))
+    .or_else(|| xmp_text(raw, "dc", "creator"));
     u
 }
 
@@ -357,41 +393,12 @@ pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
 /// 严格定长定分隔；任一段越界或格式不符 → None（不臆造）。
 fn parse_exif_datetime(s: &str) -> Option<DateTimeParts> {
     let b = s.as_bytes();
-    if b.len() != 19 || b[4] != b':' || b[7] != b':' || b[10] != b' ' || b[13] != b':' || b[16] != b':' {
-        return None;
-    }
-    let num = |r: core::ops::Range<usize>| -> Option<u32> {
-        let mut v = 0u32;
-        for &c in &b[r] {
-            if !c.is_ascii_digit() { return None; }
-            v = v * 10 + u32::from(c - b'0');
-        }
-        Some(v)
-    };
-    let year = num(0..4)?;
-    let month = num(5..7)?;
-    let day = num(8..10)?;
-    let hour = num(11..13)?;
-    let minute = num(14..16)?;
-    let second = num(17..19)?;
-    if year == 0 || !(1..=12).contains(&month) || !(1..=31).contains(&day)
-        || hour > 23 || minute > 59 || second > 60
-    {
-        return None;
-    }
-    Some(DateTimeParts {
-        year: year as u16, month: month as u8, day: day as u8,
-        hour: hour as u8, minute: minute as u8, second: second as u8,
-        tz_offset_min: None,
-    })
-}
-
-/// 解析 ISO 8601 "YYYY-MM-DDThh:mm:ss[Z|±hh:mm]" → DateTimeParts。
-/// 严格定长定分隔；Z→Some(0)，±hh:mm→分钟，无后缀→None；越界→None（不臆造）。
-pub(crate) fn parse_iso8601(s: &str) -> Option<DateTimeParts> {
-    let b = s.as_bytes();
-    if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T'
-        || b[13] != b':' || b[16] != b':'
+    if b.len() != 19
+        || b[4] != b':'
+        || b[7] != b':'
+        || b[10] != b' '
+        || b[13] != b':'
+        || b[16] != b':'
     {
         return None;
     }
@@ -411,8 +418,61 @@ pub(crate) fn parse_iso8601(s: &str) -> Option<DateTimeParts> {
     let hour = num(11..13)?;
     let minute = num(14..16)?;
     let second = num(17..19)?;
-    if year == 0 || !(1..=12).contains(&month) || !(1..=31).contains(&day)
-        || hour > 23 || minute > 59 || second > 60
+    if year == 0
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+    Some(DateTimeParts {
+        year: year as u16,
+        month: month as u8,
+        day: day as u8,
+        hour: hour as u8,
+        minute: minute as u8,
+        second: second as u8,
+        tz_offset_min: None,
+    })
+}
+
+/// 解析 ISO 8601 "YYYY-MM-DDThh:mm:ss[Z|±hh:mm]" → DateTimeParts。
+/// 严格定长定分隔；Z→Some(0)，±hh:mm→分钟，无后缀→None；越界→None（不臆造）。
+pub(crate) fn parse_iso8601(s: &str) -> Option<DateTimeParts> {
+    let b = s.as_bytes();
+    if b.len() < 19
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+    {
+        return None;
+    }
+    let num = |r: core::ops::Range<usize>| -> Option<u32> {
+        let mut v = 0u32;
+        for &c in &b[r] {
+            if !c.is_ascii_digit() {
+                return None;
+            }
+            v = v * 10 + u32::from(c - b'0');
+        }
+        Some(v)
+    };
+    let year = num(0..4)?;
+    let month = num(5..7)?;
+    let day = num(8..10)?;
+    let hour = num(11..13)?;
+    let minute = num(14..16)?;
+    let second = num(17..19)?;
+    if year == 0
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
     {
         return None;
     }
@@ -447,8 +507,12 @@ pub(crate) fn parse_iso8601(s: &str) -> Option<DateTimeParts> {
         _ => return None,
     };
     Some(DateTimeParts {
-        year: year as u16, month: month as u8, day: day as u8,
-        hour: hour as u8, minute: minute as u8, second: second as u8,
+        year: year as u16,
+        month: month as u8,
+        day: day as u8,
+        hour: hour as u8,
+        minute: minute as u8,
+        second: second as u8,
         tz_offset_min: tz,
     })
 }
@@ -461,12 +525,16 @@ fn parse_exif_offset(s: &str) -> Option<i16> {
     }
     let two = |i: usize| -> Option<i16> {
         let (h, l) = (b[i], b[i + 1]);
-        if !h.is_ascii_digit() || !l.is_ascii_digit() { return None; }
+        if !h.is_ascii_digit() || !l.is_ascii_digit() {
+            return None;
+        }
         Some(i16::from((h - b'0') * 10 + (l - b'0')))
     };
     let hh = two(1)?;
     let mm = two(4)?;
-    if hh > 23 || mm > 59 { return None; }
+    if hh > 23 || mm > 59 {
+        return None;
+    }
     let mag = hh * 60 + mm;
     Some(if b[0] == b'-' { -mag } else { mag })
 }
@@ -482,9 +550,21 @@ mod tests {
     fn projects_exif_tags_to_unified() {
         let raw = RawTags {
             exif: Vec::from([
-                ExifTag { ifd: IfdKind::Primary, tag: 0x010F, value: Value::Text(String::from("Acme")) },
-                ExifTag { ifd: IfdKind::Primary, tag: 0x0110, value: Value::Text(String::from("X100")) },
-                ExifTag { ifd: IfdKind::Primary, tag: 0x0112, value: Value::U16(6) },
+                ExifTag {
+                    ifd: IfdKind::Primary,
+                    tag: 0x010F,
+                    value: Value::Text(String::from("Acme")),
+                },
+                ExifTag {
+                    ifd: IfdKind::Primary,
+                    tag: 0x0110,
+                    value: Value::Text(String::from("X100")),
+                },
+                ExifTag {
+                    ifd: IfdKind::Primary,
+                    tag: 0x0112,
+                    value: Value::U16(6),
+                },
             ]),
             xmp: Vec::new(),
             container: Vec::new(),
@@ -500,7 +580,11 @@ mod tests {
     #[test]
     fn unknown_orientation_value_is_dropped_with_warning() {
         let raw = RawTags {
-            exif: Vec::from([ExifTag { ifd: IfdKind::Primary, tag: 0x0112, value: Value::U16(99) }]),
+            exif: Vec::from([ExifTag {
+                ifd: IfdKind::Primary,
+                tag: 0x0112,
+                value: Value::U16(99),
+            }]),
             xmp: Vec::new(),
             container: Vec::new(),
         };
@@ -563,8 +647,16 @@ mod tests {
         // Unified.orientation 必须只反映 IFD0。
         let raw = RawTags {
             exif: Vec::from([
-                ExifTag { ifd: IfdKind::Primary, tag: 0x0112, value: Value::U16(1) },
-                ExifTag { ifd: IfdKind::Thumbnail, tag: 0x0112, value: Value::U16(6) },
+                ExifTag {
+                    ifd: IfdKind::Primary,
+                    tag: 0x0112,
+                    value: Value::U16(1),
+                },
+                ExifTag {
+                    ifd: IfdKind::Thumbnail,
+                    tag: 0x0112,
+                    value: Value::U16(6),
+                },
             ]),
             xmp: Vec::new(),
             container: Vec::new(),
@@ -576,7 +668,11 @@ mod tests {
     }
 
     fn exif_tag(ifd: IfdKind, tag: u16, text: &str) -> ExifTag {
-        ExifTag { ifd, tag, value: Value::Text(String::from(text)) }
+        ExifTag {
+            ifd,
+            tag,
+            value: Value::Text(String::from(text)),
+        }
     }
 
     #[test]
@@ -589,7 +685,10 @@ mod tests {
         let mut w = Vec::new();
         let u = normalize(&raw, &mut w);
         let c = u.created.expect("created");
-        assert_eq!((c.year, c.month, c.day, c.hour, c.minute, c.second), (2003, 1, 24, 9, 20, 0));
+        assert_eq!(
+            (c.year, c.month, c.day, c.hour, c.minute, c.second),
+            (2003, 1, 24, 9, 20, 0)
+        );
         assert_eq!(c.tz_offset_min, None);
     }
 
@@ -642,7 +741,13 @@ mod tests {
 
     #[test]
     fn created_malformed_is_none() {
-        for bad in ["not-a-date", "2003-01-24 09:20:00", "2003:13:40 25:99:99", "", "0000:01:01 00:00:00"] {
+        for bad in [
+            "not-a-date",
+            "2003-01-24 09:20:00",
+            "2003:13:40 25:99:99",
+            "",
+            "0000:01:01 00:00:00",
+        ] {
             let raw = RawTags {
                 exif: Vec::from([exif_tag(IfdKind::Exif, 0x9003, bad)]),
                 xmp: Vec::new(),
@@ -670,19 +775,35 @@ mod tests {
         assert_eq!(super::meters_to_mm(1e30), None);
     }
 
-    fn rat(n: u32, d: u32) -> Value { Value::Rational(n, d) }
+    fn rat(n: u32, d: u32) -> Value {
+        Value::Rational(n, d)
+    }
 
     #[test]
     fn gps_from_exif_dms_four_quadrants() {
         // 纬 27°35'29.76"N、经 86°33'50.4"W → 约 27.5916, -86.5640
         let raw = RawTags {
             exif: Vec::from([
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0001, value: Value::Text(String::from("N")) },
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0002,
-                    value: Value::List(Vec::from([rat(27, 1), rat(35, 1), rat(2976, 100)])) },
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0003, value: Value::Text(String::from("W")) },
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0004,
-                    value: Value::List(Vec::from([rat(86, 1), rat(33, 1), rat(504, 10)])) },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0001,
+                    value: Value::Text(String::from("N")),
+                },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0002,
+                    value: Value::List(Vec::from([rat(27, 1), rat(35, 1), rat(2976, 100)])),
+                },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0003,
+                    value: Value::Text(String::from("W")),
+                },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0004,
+                    value: Value::List(Vec::from([rat(86, 1), rat(33, 1), rat(504, 10)])),
+                },
             ]),
             xmp: Vec::new(),
             container: Vec::new(),
@@ -698,14 +819,36 @@ mod tests {
     fn gps_altitude_below_sea_level_is_negative() {
         let raw = RawTags {
             exif: Vec::from([
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0001, value: Value::Text(String::from("N")) },
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0002,
-                    value: Value::List(Vec::from([rat(10, 1), rat(0, 1), rat(0, 1)])) },
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0003, value: Value::Text(String::from("E")) },
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0004,
-                    value: Value::List(Vec::from([rat(20, 1), rat(0, 1), rat(0, 1)])) },
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0005, value: Value::Bytes(Vec::from([1u8])) },
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0006, value: rat(105, 10) }, // 10.5 m
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0001,
+                    value: Value::Text(String::from("N")),
+                },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0002,
+                    value: Value::List(Vec::from([rat(10, 1), rat(0, 1), rat(0, 1)])),
+                },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0003,
+                    value: Value::Text(String::from("E")),
+                },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0004,
+                    value: Value::List(Vec::from([rat(20, 1), rat(0, 1), rat(0, 1)])),
+                },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0005,
+                    value: Value::Bytes(Vec::from([1u8])),
+                },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0006,
+                    value: rat(105, 10),
+                }, // 10.5 m
             ]),
             xmp: Vec::new(),
             container: Vec::new(),
@@ -721,9 +864,16 @@ mod tests {
     fn gps_only_latitude_yields_none_with_warning() {
         let raw = RawTags {
             exif: Vec::from([
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0001, value: Value::Text(String::from("N")) },
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0002,
-                    value: Value::List(Vec::from([rat(10, 1), rat(0, 1), rat(0, 1)])) },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0001,
+                    value: Value::Text(String::from("N")),
+                },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0002,
+                    value: Value::List(Vec::from([rat(10, 1), rat(0, 1), rat(0, 1)])),
+                },
             ]),
             xmp: Vec::new(),
             container: Vec::new(),
@@ -731,11 +881,20 @@ mod tests {
         let mut w = Vec::new();
         let u = normalize(&raw, &mut w);
         assert_eq!(u.gps, None);
-        assert_eq!(w.iter().filter(|x| x.kind == WarnKind::UnrecognizedValue).count(), 1);
+        assert_eq!(
+            w.iter()
+                .filter(|x| x.kind == WarnKind::UnrecognizedValue)
+                .count(),
+            1
+        );
     }
 
     fn xmp_p(prefix: &str, name: &str, value: &str) -> XmpProperty {
-        XmpProperty { prefix: String::from(prefix), name: String::from(name), value: String::from(value) }
+        XmpProperty {
+            prefix: String::from(prefix),
+            name: String::from(name),
+            value: String::from(value),
+        }
     }
 
     #[test]
@@ -758,7 +917,10 @@ mod tests {
     #[test]
     fn iso8601_with_offset_and_z_and_naive() {
         let a = super::parse_iso8601("2017-07-22T16:06:06+10:00").unwrap();
-        assert_eq!((a.year, a.month, a.day, a.hour, a.minute, a.second), (2017, 7, 22, 16, 6, 6));
+        assert_eq!(
+            (a.year, a.month, a.day, a.hour, a.minute, a.second),
+            (2017, 7, 22, 16, 6, 6)
+        );
         assert_eq!(a.tz_offset_min, Some(600));
         let z = super::parse_iso8601("2020-01-02T03:04:05Z").unwrap();
         assert_eq!(z.tz_offset_min, Some(0));
@@ -768,7 +930,15 @@ mod tests {
 
     #[test]
     fn iso8601_malformed_is_none() {
-        for bad in ["", "2020-13-02T03:04:05Z", "2020-01-02 03:04:05", "not-a-date", "2020-01-02T25:00:00Z", "2020-01-02T03:04:05Z ", "2020-01-02T03:04:05+10"] {
+        for bad in [
+            "",
+            "2020-13-02T03:04:05Z",
+            "2020-01-02 03:04:05",
+            "not-a-date",
+            "2020-01-02T25:00:00Z",
+            "2020-01-02T03:04:05Z ",
+            "2020-01-02T03:04:05+10",
+        ] {
             assert_eq!(super::parse_iso8601(bad), None, "input {bad:?}");
         }
     }
@@ -777,7 +947,10 @@ mod tests {
     fn iso8601_offset_without_colon() {
         // Apple iPhone .MOV creationdate form: 无冒号偏移
         let a = super::parse_iso8601("2017-07-22T16:06:06+1000").unwrap();
-        assert_eq!((a.year, a.month, a.day, a.hour, a.minute, a.second), (2017, 7, 22, 16, 6, 6));
+        assert_eq!(
+            (a.year, a.month, a.day, a.hour, a.minute, a.second),
+            (2017, 7, 22, 16, 6, 6)
+        );
         assert_eq!(a.tz_offset_min, Some(600));
         let neg = super::parse_iso8601("2020-01-02T03:04:05-0530").unwrap();
         assert_eq!(neg.tz_offset_min, Some(-330));
@@ -789,12 +962,26 @@ mod tests {
     fn gps_exif_wins_over_xmp() {
         let raw = RawTags {
             exif: Vec::from([
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0001, value: Value::Text(String::from("N")) },
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0002,
-                    value: Value::List(Vec::from([rat(10, 1), rat(0, 1), rat(0, 1)])) },
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0003, value: Value::Text(String::from("E")) },
-                ExifTag { ifd: IfdKind::Gps, tag: 0x0004,
-                    value: Value::List(Vec::from([rat(20, 1), rat(0, 1), rat(0, 1)])) },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0001,
+                    value: Value::Text(String::from("N")),
+                },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0002,
+                    value: Value::List(Vec::from([rat(10, 1), rat(0, 1), rat(0, 1)])),
+                },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0003,
+                    value: Value::Text(String::from("E")),
+                },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0004,
+                    value: Value::List(Vec::from([rat(20, 1), rat(0, 1), rat(0, 1)])),
+                },
             ]),
             xmp: Vec::from([
                 xmp_p("exif", "GPSLatitude", "39,57.0900N"),
@@ -846,9 +1033,21 @@ mod tests {
         use crate::model::{ContainerSource, ContainerTag, ExifTag, IfdKind, Value, XmpProperty};
         let mut warnings = Vec::new();
         let raw = RawTags {
-            exif: alloc::vec![ExifTag { ifd: IfdKind::Primary, tag: 0x0131, value: Value::Text(alloc::string::String::from("ExifSW")) }],
-            xmp: alloc::vec![XmpProperty { prefix: alloc::string::String::from("xmp"), name: alloc::string::String::from("CreatorTool"), value: alloc::string::String::from("XmpSW") }],
-            container: alloc::vec![ContainerTag { source: ContainerSource::QuickTimeMdta, key: alloc::string::String::from("com.apple.quicktime.software"), value: Value::Text(alloc::string::String::from("ContainerSW")) }],
+            exif: alloc::vec![ExifTag {
+                ifd: IfdKind::Primary,
+                tag: 0x0131,
+                value: Value::Text(alloc::string::String::from("ExifSW"))
+            }],
+            xmp: alloc::vec![XmpProperty {
+                prefix: alloc::string::String::from("xmp"),
+                name: alloc::string::String::from("CreatorTool"),
+                value: alloc::string::String::from("XmpSW")
+            }],
+            container: alloc::vec![ContainerTag {
+                source: ContainerSource::QuickTimeMdta,
+                key: alloc::string::String::from("com.apple.quicktime.software"),
+                value: Value::Text(alloc::string::String::from("ContainerSW"))
+            }],
         };
         let u = normalize(&raw, &mut warnings);
         assert_eq!(u.software.as_deref(), Some("ContainerSW"));
@@ -859,16 +1058,31 @@ mod tests {
         use crate::model::{ExifTag, IfdKind, Value, XmpProperty};
         let mut warnings = Vec::new();
         let raw_exif = RawTags {
-            exif: alloc::vec![ExifTag { ifd: IfdKind::Primary, tag: 0x0131, value: Value::Text(alloc::string::String::from("ExifSW")) }],
-            xmp: Vec::new(), container: Vec::new(),
-        };
-        assert_eq!(normalize(&raw_exif, &mut warnings).software.as_deref(), Some("ExifSW"));
-        let raw_xmp = RawTags {
-            exif: Vec::new(),
-            xmp: alloc::vec![XmpProperty { prefix: alloc::string::String::from("xmp"), name: alloc::string::String::from("CreatorTool"), value: alloc::string::String::from("XmpSW") }],
+            exif: alloc::vec![ExifTag {
+                ifd: IfdKind::Primary,
+                tag: 0x0131,
+                value: Value::Text(alloc::string::String::from("ExifSW"))
+            }],
+            xmp: Vec::new(),
             container: Vec::new(),
         };
-        assert_eq!(normalize(&raw_xmp, &mut warnings).software.as_deref(), Some("XmpSW"));
+        assert_eq!(
+            normalize(&raw_exif, &mut warnings).software.as_deref(),
+            Some("ExifSW")
+        );
+        let raw_xmp = RawTags {
+            exif: Vec::new(),
+            xmp: alloc::vec![XmpProperty {
+                prefix: alloc::string::String::from("xmp"),
+                name: alloc::string::String::from("CreatorTool"),
+                value: alloc::string::String::from("XmpSW")
+            }],
+            container: Vec::new(),
+        };
+        assert_eq!(
+            normalize(&raw_xmp, &mut warnings).software.as_deref(),
+            Some("XmpSW")
+        );
     }
 
     #[test]
@@ -876,14 +1090,30 @@ mod tests {
         use crate::model::{ContainerSource, ContainerTag, ExifTag, IfdKind, Value};
         let mut warnings = Vec::new();
         let raw_udta = RawTags {
-            exif: Vec::new(), xmp: Vec::new(),
-            container: alloc::vec![ContainerTag { source: ContainerSource::Udta, key: alloc::string::String::from("©aut"), value: Value::Text(alloc::string::String::from("Auteur")) }],
+            exif: Vec::new(),
+            xmp: Vec::new(),
+            container: alloc::vec![ContainerTag {
+                source: ContainerSource::Udta,
+                key: alloc::string::String::from("©aut"),
+                value: Value::Text(alloc::string::String::from("Auteur"))
+            }],
         };
-        assert_eq!(normalize(&raw_udta, &mut warnings).creator.as_deref(), Some("Auteur"));
+        assert_eq!(
+            normalize(&raw_udta, &mut warnings).creator.as_deref(),
+            Some("Auteur")
+        );
         let raw_artist = RawTags {
-            exif: alloc::vec![ExifTag { ifd: IfdKind::Primary, tag: 0x013B, value: Value::Text(alloc::string::String::from("Shooter")) }],
-            xmp: Vec::new(), container: Vec::new(),
+            exif: alloc::vec![ExifTag {
+                ifd: IfdKind::Primary,
+                tag: 0x013B,
+                value: Value::Text(alloc::string::String::from("Shooter"))
+            }],
+            xmp: Vec::new(),
+            container: Vec::new(),
         };
-        assert_eq!(normalize(&raw_artist, &mut warnings).creator.as_deref(), Some("Shooter"));
+        assert_eq!(
+            normalize(&raw_artist, &mut warnings).creator.as_deref(),
+            Some("Shooter")
+        );
     }
 }

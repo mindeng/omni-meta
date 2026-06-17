@@ -6,24 +6,23 @@ extern crate alloc;
 // 内部模块一律 pub(crate)：公开 API 仅通过下方精选的 `pub use` 暴露，
 // 避免内部路径（如 omni_meta::driver::drive_slice）固化成 semver 稳定面。
 pub(crate) mod adapters;
+pub(crate) mod civil;
 pub(crate) mod codecs;
 pub(crate) mod containers;
-pub(crate) mod formats;
-pub(crate) mod civil;
 pub(crate) mod cursor;
 pub(crate) mod demand;
+pub(crate) mod driver;
 pub(crate) mod error;
+pub(crate) mod formats;
 pub(crate) mod limits;
 pub(crate) mod model;
 pub(crate) mod normalize;
 pub(crate) mod probe;
-pub(crate) mod driver;
 pub(crate) mod strip;
 
 pub use adapters::push::PushParser;
-pub use adapters::slice::{read_slice, Options};
+pub use adapters::slice::{Options, read_slice};
 pub use adapters::strip_slice::strip_slice;
-pub use strip::{RemovedKind, RemovedKinds, StripOptions, StripReport};
 pub use driver::Outcome;
 pub use error::Error;
 pub use limits::Limits;
@@ -31,6 +30,7 @@ pub use model::{
     ContainerSource, ContainerTag, DateTimeParts, ExifTag, FileFormat, Gps, IfdKind, Metadata,
     Orientation, RawTags, Unified, Value, WarnKind, Warning, XmpProperty,
 };
+pub use strip::{RemovedKind, RemovedKinds, StripOptions, StripReport};
 
 /// 模糊专用入口（薄包装）。仅在 `__fuzzing` 特性下编译；`#[doc(hidden)]` 且
 /// 双下划线命名，明确「内部、非 semver 稳定」。绕过 probe，强制走指定解析路径。
@@ -83,7 +83,11 @@ mod smoke {
     #[test]
     fn gps_and_container_source_are_reexported() {
         // 经 crate 根路径可命名 → 证明已重导出（编译期即验证）。
-        let _g: crate::Gps = crate::Gps { lat_e7: 0, lon_e7: 0, alt_mm: None };
+        let _g: crate::Gps = crate::Gps {
+            lat_e7: 0,
+            lon_e7: 0,
+            alt_mm: None,
+        };
         let _s: crate::ContainerSource = crate::ContainerSource::QuickTimeMdta;
     }
 }

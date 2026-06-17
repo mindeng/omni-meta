@@ -3,7 +3,7 @@
 
 use std::io::{Read, Write};
 
-use omni_meta_core::{strip_slice, Error, StripOptions, StripReport};
+use omni_meta_core::{Error, StripOptions, StripReport, strip_slice};
 
 const CHUNK: usize = 8192;
 
@@ -34,7 +34,7 @@ pub fn strip_blocking<R: Read, W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use omni_meta_core::{strip_slice, StripOptions};
+    use omni_meta_core::{StripOptions, strip_slice};
 
     fn minimal_jpeg() -> Vec<u8> {
         let mut j = Vec::new();
@@ -54,7 +54,10 @@ mod tests {
         let (slice_out, _r) = strip_slice(&j, StripOptions::aggressive()).unwrap();
         let mut blocking_out: Vec<u8> = Vec::new();
         let report = strip_blocking(&j[..], &mut blocking_out, StripOptions::aggressive()).unwrap();
-        assert_eq!(blocking_out, slice_out, "blocking 输出须与 slice 字节级一致");
+        assert_eq!(
+            blocking_out, slice_out,
+            "blocking 输出须与 slice 字节级一致"
+        );
         assert_eq!(report.format, omni_meta_core::FileFormat::Jpeg);
     }
 

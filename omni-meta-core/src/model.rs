@@ -264,10 +264,26 @@ mod tests {
 
     #[test]
     fn datetime_parts_construct_and_eq() {
-        let a = DateTimeParts { year: 1970, month: 1, day: 1, hour: 0, minute: 0, second: 0, tz_offset_min: Some(0) };
-        let b = DateTimeParts { year: 1970, month: 1, day: 1, hour: 0, minute: 0, second: 0, tz_offset_min: None };
+        let a = DateTimeParts {
+            year: 1970,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            tz_offset_min: Some(0),
+        };
+        let b = DateTimeParts {
+            year: 1970,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            tz_offset_min: None,
+        };
         assert_eq!(a.tz_offset_min, Some(0)); // BMFF: UTC
-        assert_eq!(b.tz_offset_min, None);    // EXIF 本地: 无时区
+        assert_eq!(b.tz_offset_min, None); // EXIF 本地: 无时区
         assert_ne!(a, b);
     }
 
@@ -276,11 +292,26 @@ mod tests {
         let d = Field::Duration(1_501_500);
         assert_eq!(d, Field::Duration(1_501_500));
         let c = Field::Created(DateTimeParts {
-            year: 2018, month: 1, day: 1, hour: 0, minute: 0, second: 0, tz_offset_min: Some(0),
+            year: 2018,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            tz_offset_min: Some(0),
         });
-        assert_ne!(c, Field::Created(DateTimeParts {
-            year: 2019, month: 1, day: 1, hour: 0, minute: 0, second: 0, tz_offset_min: Some(0),
-        }));
+        assert_ne!(
+            c,
+            Field::Created(DateTimeParts {
+                year: 2019,
+                month: 1,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                tz_offset_min: Some(0),
+            })
+        );
     }
 
     #[test]
@@ -298,8 +329,16 @@ mod tests {
 
     #[test]
     fn gps_constructs_and_eq() {
-        let a = Gps { lat_e7: 275_916_000, lon_e7: 865_640_000, alt_mm: Some(8_850_000) };
-        let b = Gps { lat_e7: 275_916_000, lon_e7: 865_640_000, alt_mm: None };
+        let a = Gps {
+            lat_e7: 275_916_000,
+            lon_e7: 865_640_000,
+            alt_mm: Some(8_850_000),
+        };
+        let b = Gps {
+            lat_e7: 275_916_000,
+            lon_e7: 865_640_000,
+            alt_mm: None,
+        };
         assert_eq!(a.lat_e7, 275_916_000);
         assert_ne!(a, b);
     }
@@ -312,8 +351,19 @@ mod tests {
 
     #[test]
     fn field_has_gps_make_model_variants() {
-        let g = Field::Gps(Gps { lat_e7: 1, lon_e7: 2, alt_mm: None });
-        assert_eq!(g, Field::Gps(Gps { lat_e7: 1, lon_e7: 2, alt_mm: None }));
+        let g = Field::Gps(Gps {
+            lat_e7: 1,
+            lon_e7: 2,
+            alt_mm: None,
+        });
+        assert_eq!(
+            g,
+            Field::Gps(Gps {
+                lat_e7: 1,
+                lon_e7: 2,
+                alt_mm: None
+            })
+        );
         assert_eq!(
             Field::CameraMake(String::from("Apple")),
             Field::CameraMake(String::from("Apple"))

@@ -6,7 +6,9 @@ use alloc::vec::Vec;
 use crate::containers::isobmff::{full_box_vf, iter_child_boxes, read_box_header, read_uint_be};
 use crate::cursor::{ByteCursor, Endian};
 use crate::demand::{Demand, Event, MetaParser, PayloadKind, PullResult};
-use crate::model::{ContainerSource, ContainerTag, DateTimeParts, Field, Gps, Value, WarnKind, Warning};
+use crate::model::{
+    ContainerSource, ContainerTag, DateTimeParts, Field, Gps, Value, WarnKind, Warning,
+};
 
 /// MP4/MOV 纪元起点（1904-01-01）相对 Unix 纪元（1970-01-01）的天数差。
 const MP4_EPOCH_DAYS_BEFORE_UNIX: i64 = 24107;
@@ -47,16 +49,38 @@ fn parse_mvhd(payload: &[u8]) -> Mvhd {
         return out;
     }
     let (creation, timescale, duration) = if version == 1 {
-        let creation = match read_uint_be(&mut cur, 8) { Some(v) => v, None => return out };
-        if read_uint_be(&mut cur, 8).is_none() { return out; } // modification_time
-        let timescale = match cur.u32(Endian::Big) { Some(v) => v, None => return out };
-        let duration = match read_uint_be(&mut cur, 8) { Some(v) => v, None => return out };
+        let creation = match read_uint_be(&mut cur, 8) {
+            Some(v) => v,
+            None => return out,
+        };
+        if read_uint_be(&mut cur, 8).is_none() {
+            return out;
+        } // modification_time
+        let timescale = match cur.u32(Endian::Big) {
+            Some(v) => v,
+            None => return out,
+        };
+        let duration = match read_uint_be(&mut cur, 8) {
+            Some(v) => v,
+            None => return out,
+        };
         (creation, timescale, duration)
     } else {
-        let creation = match cur.u32(Endian::Big) { Some(v) => u64::from(v), None => return out };
-        if cur.u32(Endian::Big).is_none() { return out; } // modification_time
-        let timescale = match cur.u32(Endian::Big) { Some(v) => v, None => return out };
-        let duration = match cur.u32(Endian::Big) { Some(v) => u64::from(v), None => return out };
+        let creation = match cur.u32(Endian::Big) {
+            Some(v) => u64::from(v),
+            None => return out,
+        };
+        if cur.u32(Endian::Big).is_none() {
+            return out;
+        } // modification_time
+        let timescale = match cur.u32(Endian::Big) {
+            Some(v) => v,
+            None => return out,
+        };
+        let duration = match cur.u32(Endian::Big) {
+            Some(v) => u64::from(v),
+            None => return out,
+        };
         (creation, timescale, duration)
     };
     // duration_ms = duration * 1000 / timescale（u128 中间量防溢出）。
@@ -127,7 +151,13 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovI
     };
     let mut xyz_gps: Option<Gps> = None;
     let mut loci_gps: Option<Gps> = None;
-    let mut mdta = QtMdta { gps: None, make: None, model: None, created: None, tags: alloc::vec::Vec::new() };
+    let mut mdta = QtMdta {
+        gps: None,
+        make: None,
+        model: None,
+        created: None,
+        tags: alloc::vec::Vec::new(),
+    };
     let mut udta_tags: Vec<ContainerTag> = Vec::new();
     for (hdr, p) in iter_child_boxes(moov_payload) {
         match &hdr.kind {
@@ -136,7 +166,10 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovI
                 info.duration_ms = m.duration_ms;
                 info.created = m.created;
                 if m.timescale_invalid {
-                    info.warnings.push(Warning { offset: moov_abs_base, kind: WarnKind::UnrecognizedValue });
+                    info.warnings.push(Warning {
+                        offset: moov_abs_base,
+                        kind: WarnKind::UnrecognizedValue,
+                    });
                 }
             }
             b"trak" if info.dims.is_none() => {
@@ -157,7 +190,9 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovI
                         // ©xyz は GPS 専用；generic arm から除外（二重目も container に漏らさない）。
                         k if k[0] == 0xA9 && k != b"\xA9xyz" => {
                             if udta_tags.len() < max_tags {
-                                if let (Some(key), Some(text)) = (udta_key_string(k), parse_udta_text(up)) {
+                                if let (Some(key), Some(text)) =
+                                    (udta_key_string(k), parse_udta_text(up))
+                                {
                                     udta_tags.push(ContainerTag {
                                         source: ContainerSource::Udta,
                                         key,
@@ -173,10 +208,18 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovI
             b"meta" => {
                 let remaining = max_tags.saturating_sub(mdta.tags.len());
                 let m = parse_qt_mdta(p, remaining);
-                if mdta.gps.is_none() { mdta.gps = m.gps; }
-                if mdta.make.is_none() { mdta.make = m.make; }
-                if mdta.model.is_none() { mdta.model = m.model; }
-                if mdta.created.is_none() { mdta.created = m.created; }
+                if mdta.gps.is_none() {
+                    mdta.gps = m.gps;
+                }
+                if mdta.make.is_none() {
+                    mdta.make = m.make;
+                }
+                if mdta.model.is_none() {
+                    mdta.model = m.model;
+                }
+                if mdta.created.is_none() {
+                    mdta.created = m.created;
+                }
                 mdta.tags.extend(m.tags);
             }
             _ => {}
@@ -223,7 +266,10 @@ fn parse_infe(payload: &[u8]) -> Option<Wanted> {
     let _protection = cur.u16(Endian::Big)?;
     let item_type = cur.take(4)?;
     if item_type == b"Exif" {
-        return Some(Wanted { id, kind: PayloadKind::Exif });
+        return Some(Wanted {
+            id,
+            kind: PayloadKind::Exif,
+        });
     }
     if item_type == b"mime" {
         // ItemInfoEntry v2/3：item_name(null 终止) 在 item_type 之后、content_type 之前。
@@ -233,7 +279,10 @@ fn parse_infe(payload: &[u8]) -> Option<Wanted> {
             None => return None,
         };
         if take_cstr(&rest[after_name..]) == b"application/rdf+xml" {
-            return Some(Wanted { id, kind: PayloadKind::Xmp });
+            return Some(Wanted {
+                id,
+                kind: PayloadKind::Xmp,
+            });
         }
     }
     None
@@ -353,7 +402,10 @@ fn parse_iloc(payload: &[u8]) -> Vec<Loc> {
         let mut first_extent = None;
         let mut ok = true;
         for i in 0..extent_count {
-            if (version == 1 || version == 2) && index_size > 0 && read_uint_be(&mut cur, index_size).is_none() {
+            if (version == 1 || version == 2)
+                && index_size > 0
+                && read_uint_be(&mut cur, index_size).is_none()
+            {
                 ok = false;
                 break;
             }
@@ -378,7 +430,12 @@ fn parse_iloc(payload: &[u8]) -> Vec<Loc> {
         if !ok {
             break;
         }
-        out.push(Loc { id, method, extent_count, first_extent });
+        out.push(Loc {
+            id,
+            method,
+            extent_count,
+            first_extent,
+        });
     }
     out
 }
@@ -425,7 +482,8 @@ fn dims_via_ipma(payload: &[u8], primary: u32, props: &[Option<(u32, u32)>]) -> 
             } else {
                 (cur.u8()? & 0x7F) as usize
             };
-            if item_id == primary && idx >= 1
+            if item_id == primary
+                && idx >= 1
                 && let Some(Some(dims)) = props.get(idx - 1)
             {
                 return Some(*dims);
@@ -450,7 +508,11 @@ fn dims_from_iprp(iprp_payload: &[u8], primary: Option<u32>) -> Option<(u32, u32
     let ipco = ipco_payload?;
     let mut props: Vec<Option<(u32, u32)>> = Vec::new();
     for (hdr, p) in iter_child_boxes(ipco) {
-        props.push(if &hdr.kind == b"ispe" { parse_ispe(p) } else { None });
+        props.push(if &hdr.kind == b"ispe" {
+            parse_ispe(p)
+        } else {
+            None
+        });
     }
     if let (Some(ipma), Some(pid)) = (ipma_payload, primary)
         && let Some(dims) = dims_via_ipma(ipma, pid, &props)
@@ -464,11 +526,7 @@ fn dims_from_iprp(iprp_payload: &[u8], primary: Option<u32>) -> Option<(u32, u32
         found = Some(*d);
         n += 1;
     }
-    if n == 1 {
-        found
-    } else {
-        None
-    }
+    if n == 1 { found } else { None }
 }
 
 /// 一个 method-0 抽取目标（数据在文件别处，需 SeekTo）。
@@ -504,7 +562,12 @@ fn strip_exif_prefix(d: &[u8]) -> &[u8] {
 /// 解析 meta box 载荷（meta 自身是 FullBox）。`meta_abs_base` 为 meta box 在文件中的绝对起点
 /// （仅用于警告偏移）。
 fn parse_meta(meta_payload: &[u8], meta_abs_base: u64) -> MetaPlan<'_> {
-    let mut plan = MetaPlan { dims: None, inline: Vec::new(), targets: Vec::new(), warnings: Vec::new() };
+    let mut plan = MetaPlan {
+        dims: None,
+        inline: Vec::new(),
+        targets: Vec::new(),
+        warnings: Vec::new(),
+    };
     if full_box_vf(meta_payload).is_none() {
         return plan;
     }
@@ -534,7 +597,10 @@ fn parse_meta(meta_payload: &[u8], meta_abs_base: u64) -> MetaPlan<'_> {
         };
         if loc.extent_count != 1 {
             // 多 extent（需拼接）暂不支持
-            plan.warnings.push(Warning { offset: meta_abs_base, kind: WarnKind::UnreachableSection });
+            plan.warnings.push(Warning {
+                offset: meta_abs_base,
+                kind: WarnKind::UnreachableSection,
+            });
             continue;
         }
         let (off, len) = match loc.first_extent {
@@ -556,17 +622,23 @@ fn parse_meta(meta_payload: &[u8], meta_abs_base: u64) -> MetaPlan<'_> {
                 });
                 match data {
                     Some(d) => {
-                        let payload = if w.kind == PayloadKind::Exif { strip_exif_prefix(d) } else { d };
+                        let payload = if w.kind == PayloadKind::Exif {
+                            strip_exif_prefix(d)
+                        } else {
+                            d
+                        };
                         plan.inline.push((w.kind, payload));
                     }
-                    None => plan
-                        .warnings
-                        .push(Warning { offset: meta_abs_base, kind: WarnKind::UnreachableSection }),
+                    None => plan.warnings.push(Warning {
+                        offset: meta_abs_base,
+                        kind: WarnKind::UnreachableSection,
+                    }),
                 }
             }
-            _ => plan
-                .warnings
-                .push(Warning { offset: meta_abs_base, kind: WarnKind::UnreachableSection }),
+            _ => plan.warnings.push(Warning {
+                offset: meta_abs_base,
+                kind: WarnKind::UnreachableSection,
+            }),
         }
     }
     plan.targets.sort_by_key(|t| t.offset);
@@ -594,7 +666,10 @@ impl BmffParser {
         Self::with_limits(crate::limits::Limits::default())
     }
     pub fn with_limits(limits: crate::limits::Limits) -> Self {
-        Self { max_tags: limits.max_tags, ..Self::default() }
+        Self {
+            max_tags: limits.max_tags,
+            ..Self::default()
+        }
     }
 }
 
@@ -610,7 +685,11 @@ fn needed_header_bytes(input: &[u8]) -> usize {
 impl MetaParser for BmffParser {
     fn pull<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
         if self.done {
-            return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+            return PullResult {
+                demand: Demand::Done,
+                consumed: 0,
+                events: Vec::new(),
+            };
         }
         if self.extracting {
             return self.pull_extract(input);
@@ -625,7 +704,11 @@ impl BmffParser {
     fn pull_walk<'a>(&mut self, input: &'a [u8]) -> PullResult<'a> {
         if input.is_empty() {
             self.done = true;
-            return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+            return PullResult {
+                demand: Demand::Done,
+                consumed: 0,
+                events: Vec::new(),
+            };
         }
         let hdr = match read_box_header(input) {
             Some(h) => h,
@@ -643,24 +726,40 @@ impl BmffParser {
                 None => {
                     // size0 meta（延伸至 EOF）：本里程碑不处理，干净结束。
                     self.done = true;
-                    return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+                    return PullResult {
+                        demand: Demand::Done,
+                        consumed: 0,
+                        events: Vec::new(),
+                    };
                 }
             };
             let need = match usize::try_from(total) {
                 Ok(n) => n,
                 Err(_) => {
                     self.done = true;
-                    return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+                    return PullResult {
+                        demand: Demand::Done,
+                        consumed: 0,
+                        events: Vec::new(),
+                    };
                 }
             };
             let header_len = hdr.header_len as usize;
             if need < header_len {
                 // 畸形 meta：声明大小小于其自身头部 → 干净结束，绝不 panic。
                 self.done = true;
-                return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+                return PullResult {
+                    demand: Demand::Done,
+                    consumed: 0,
+                    events: Vec::new(),
+                };
             }
             if input.len() < need {
-                return PullResult { demand: Demand::NeedBytes(need), consumed: 0, events: Vec::new() };
+                return PullResult {
+                    demand: Demand::NeedBytes(need),
+                    consumed: 0,
+                    events: Vec::new(),
+                };
             }
             let plan = parse_meta(&input[header_len..need], self.pos);
             let mut events: Vec<Event<'a>> = Vec::new();
@@ -677,12 +776,20 @@ impl BmffParser {
             self.targets = plan.targets;
             if self.targets.is_empty() {
                 self.done = true;
-                return PullResult { demand: Demand::Done, consumed: need, events };
+                return PullResult {
+                    demand: Demand::Done,
+                    consumed: need,
+                    events,
+                };
             }
             self.extracting = true;
             self.idx = 0;
             let first = self.targets[0].offset;
-            return PullResult { demand: Demand::SeekTo(first), consumed: need, events };
+            return PullResult {
+                demand: Demand::SeekTo(first),
+                consumed: need,
+                events,
+            };
         }
         if &hdr.kind == b"moov" {
             let total = match hdr.total_size {
@@ -690,24 +797,40 @@ impl BmffParser {
                 None => {
                     // size0 moov（延伸至 EOF）：本里程碑不处理，干净结束。
                     self.done = true;
-                    return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+                    return PullResult {
+                        demand: Demand::Done,
+                        consumed: 0,
+                        events: Vec::new(),
+                    };
                 }
             };
             let need = match usize::try_from(total) {
                 Ok(n) => n,
                 Err(_) => {
                     self.done = true;
-                    return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+                    return PullResult {
+                        demand: Demand::Done,
+                        consumed: 0,
+                        events: Vec::new(),
+                    };
                 }
             };
             let header_len = hdr.header_len as usize;
             if need < header_len {
                 // 畸形 moov：声明大小小于其自身头部 → 干净结束，绝不 panic。
                 self.done = true;
-                return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+                return PullResult {
+                    demand: Demand::Done,
+                    consumed: 0,
+                    events: Vec::new(),
+                };
             }
             if input.len() < need {
-                return PullResult { demand: Demand::NeedBytes(need), consumed: 0, events: Vec::new() };
+                return PullResult {
+                    demand: Demand::NeedBytes(need),
+                    consumed: 0,
+                    events: Vec::new(),
+                };
             }
             let info = parse_moov(&input[header_len..need], self.pos, self.max_tags);
             let mut events: Vec<Event<'a>> = Vec::new();
@@ -737,17 +860,29 @@ impl BmffParser {
                 events.push(Event::Warning(warn));
             }
             self.done = true;
-            return PullResult { demand: Demand::Done, consumed: need, events };
+            return PullResult {
+                demand: Demand::Done,
+                consumed: need,
+                events,
+            };
         }
         // 非 meta/moov：跳过整盒。size0 / 畸形（payload_len None）→ 不可能再有 meta，干净结束。
         match hdr.payload_len() {
             Some(pl) => {
                 self.pos = self.pos.saturating_add(hdr.header_len).saturating_add(pl);
-                PullResult { demand: Demand::Skip(pl), consumed: hdr.header_len as usize, events: Vec::new() }
+                PullResult {
+                    demand: Demand::Skip(pl),
+                    consumed: hdr.header_len as usize,
+                    events: Vec::new(),
+                }
             }
             None => {
                 self.done = true;
-                PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() }
+                PullResult {
+                    demand: Demand::Done,
+                    consumed: 0,
+                    events: Vec::new(),
+                }
             }
         }
     }
@@ -759,22 +894,42 @@ impl BmffParser {
             Ok(l) => l,
             Err(_) => {
                 self.done = true;
-                return PullResult { demand: Demand::Done, consumed: 0, events: Vec::new() };
+                return PullResult {
+                    demand: Demand::Done,
+                    consumed: 0,
+                    events: Vec::new(),
+                };
             }
         };
         if input.len() < len {
-            return PullResult { demand: Demand::NeedBytes(len), consumed: 0, events: Vec::new() };
+            return PullResult {
+                demand: Demand::NeedBytes(len),
+                consumed: 0,
+                events: Vec::new(),
+            };
         }
         let raw = &input[..len];
-        let data = if t.strip_exif { strip_exif_prefix(raw) } else { raw };
+        let data = if t.strip_exif {
+            strip_exif_prefix(raw)
+        } else {
+            raw
+        };
         let events: Vec<Event<'a>> = alloc::vec![Event::Payload { kind: t.kind, data }];
         self.idx += 1;
         if self.idx >= self.targets.len() {
             self.done = true;
-            return PullResult { demand: Demand::Done, consumed: len, events };
+            return PullResult {
+                demand: Demand::Done,
+                consumed: len,
+                events,
+            };
         }
         let next = self.targets[self.idx].offset;
-        PullResult { demand: Demand::SeekTo(next), consumed: len, events }
+        PullResult {
+            demand: Demand::SeekTo(next),
+            consumed: len,
+            events,
+        }
     }
 }
 
@@ -954,7 +1109,11 @@ fn parse_iso6709(s: &str) -> Option<Gps> {
         .get(2)
         .and_then(|f| scaled_decimal_i64(f, 3))
         .and_then(|v| i32::try_from(v).ok());
-    Some(Gps { lat_e7: lat, lon_e7: lon, alt_mm })
+    Some(Gps {
+        lat_e7: lat,
+        lon_e7: lon,
+        alt_mm,
+    })
 }
 
 /// QuickTime mdta 抽取产物。
@@ -972,7 +1131,13 @@ struct QtMdta {
 /// 本实现不兼容该情形，遇此则 mdta 字段静默为空（无警告）。
 /// `max_tags`：out.tags 源头上限，防 DoS 放大（Field 投影字段不受此限）。
 fn parse_qt_mdta(meta_payload: &[u8], max_tags: usize) -> QtMdta {
-    let mut out = QtMdta { gps: None, make: None, model: None, created: None, tags: alloc::vec::Vec::new() };
+    let mut out = QtMdta {
+        gps: None,
+        make: None,
+        model: None,
+        created: None,
+        tags: alloc::vec::Vec::new(),
+    };
     let mut keys: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
     let mut is_mdta = false;
     let mut ilst_payload: Option<&[u8]> = None;
@@ -1001,7 +1166,9 @@ fn parse_qt_mdta(meta_payload: &[u8], max_tags: usize) -> QtMdta {
             continue;
         }
         let key = &keys[idx as usize - 1];
-        let Some((type_code, value)) = qt_data_typed(item_payload) else { continue };
+        let Some((type_code, value)) = qt_data_typed(item_payload) else {
+            continue;
+        };
         match key.as_str() {
             "com.apple.quicktime.location.ISO6709" => {
                 if out.gps.is_none()
@@ -1162,7 +1329,11 @@ mod tests {
     fn drive_slice_lone_ftyp_is_clean() {
         // 仅 ftyp（无 meta）经 drive_slice 应干净收尾、无警告、无产物。
         let buf = ftyp_box();
-        let col = crate::driver::drive_slice(&buf, &mut BmffParser::new(), crate::limits::Limits::default());
+        let col = crate::driver::drive_slice(
+            &buf,
+            &mut BmffParser::new(),
+            crate::limits::Limits::default(),
+        );
         assert!(col.warnings.is_empty(), "warnings: {:?}", col.warnings);
         assert!(col.exif.is_empty());
         assert!(col.xmp.is_empty());
@@ -1302,14 +1473,20 @@ mod tests {
         let mut iprp_p = Vec::new();
         iprp_p.extend_from_slice(&ipco);
         iprp_p.extend_from_slice(&ipma);
-        assert_eq!(dims_from_iprp(&box_bytes(b"iprp", &iprp_p)[8..], Some(1)), Some((4032, 3024)));
+        assert_eq!(
+            dims_from_iprp(&box_bytes(b"iprp", &iprp_p)[8..], Some(1)),
+            Some((4032, 3024))
+        );
     }
 
     #[test]
     fn dims_from_iprp_single_ispe_fallback() {
         // 无 ipma 关联，但 ipco 仅一个 ispe → 兜底直接用
         let ipco = box_bytes(b"ipco", &ispe(640, 480));
-        assert_eq!(dims_from_iprp(&box_bytes(b"iprp", &ipco)[8..], None), Some((640, 480)));
+        assert_eq!(
+            dims_from_iprp(&box_bytes(b"iprp", &ipco)[8..], None),
+            Some((640, 480))
+        );
     }
 
     #[test]
@@ -1346,7 +1523,11 @@ mod tests {
         buf.extend_from_slice(&200u32.to_be_bytes()); // size=200
         buf.extend_from_slice(b"meta");
         buf.extend_from_slice(&[0u8; 12]); // 仅 12 字节载荷（合计 20 < 200）
-        let col = crate::driver::drive_slice(&buf, &mut BmffParser::new(), crate::limits::Limits::default());
+        let col = crate::driver::drive_slice(
+            &buf,
+            &mut BmffParser::new(),
+            crate::limits::Limits::default(),
+        );
         assert_eq!(col.warnings.len(), 1);
         assert_eq!(col.warnings[0].kind, WarnKind::Truncated);
     }
@@ -1479,15 +1660,30 @@ mod tests {
     #[test]
     fn end_to_end_heic_method0() {
         let buf = heic_method0();
-        let col = crate::driver::drive_slice(&buf, &mut BmffParser::new(), crate::limits::Limits::default());
+        let col = crate::driver::drive_slice(
+            &buf,
+            &mut BmffParser::new(),
+            crate::limits::Limits::default(),
+        );
         let meta = crate::driver::finalize(col, crate::model::FileFormat::Heif);
         assert!(meta.warnings.is_empty(), "warnings: {:?}", meta.warnings);
         assert_eq!(meta.unified.width, Some(4032));
         assert_eq!(meta.unified.height, Some(3024));
-        assert!(meta.raw.exif.iter().any(|t| t.tag == 0x010F), "应抽到 Make 标签");
-        assert!(meta.raw.xmp.iter().any(|x| x.name == "Make" && x.value == "Acme"));
-        assert_eq!(meta.unified.camera_make.as_deref(), Some("Acme"),
-            "unified.camera_make 须经 normalize 从 EXIF IFD0 Make 投影");
+        assert!(
+            meta.raw.exif.iter().any(|t| t.tag == 0x010F),
+            "应抽到 Make 标签"
+        );
+        assert!(
+            meta.raw
+                .xmp
+                .iter()
+                .any(|x| x.name == "Make" && x.value == "Acme")
+        );
+        assert_eq!(
+            meta.unified.camera_make.as_deref(),
+            Some("Acme"),
+            "unified.camera_make 须经 normalize 从 EXIF IFD0 Make 投影"
+        );
     }
 
     /// 构造 mvhd 载荷（box 头之后的字节），version 0。
@@ -1609,8 +1805,8 @@ mod tests {
         // moov{ mvhd, trak(audio 0×0), trak(video 1920×1080) }
         let mut moov_p = Vec::new();
         moov_p.extend_from_slice(&box_bytes(b"mvhd", &mvhd_v0(2_082_844_800, 600, 900_900)));
-        moov_p.extend_from_slice(&trak(&tkhd_v0(0, 0)));        // 音频轨先出现
-        moov_p.extend_from_slice(&trak(&tkhd_v0(1920, 1080)));  // 视频轨
+        moov_p.extend_from_slice(&trak(&tkhd_v0(0, 0))); // 音频轨先出现
+        moov_p.extend_from_slice(&trak(&tkhd_v0(1920, 1080))); // 视频轨
         let info = parse_moov(&moov_p, 0, usize::MAX);
         assert_eq!(info.dims, Some((1920, 1080))); // 跳过 0×0，选视频
         assert_eq!(info.duration_ms, Some(1_501_500));
@@ -1657,7 +1853,11 @@ mod tests {
     #[test]
     fn end_to_end_mp4_moov() {
         let buf = mp4_with_moov();
-        let col = crate::driver::drive_slice(&buf, &mut BmffParser::new(), crate::limits::Limits::default());
+        let col = crate::driver::drive_slice(
+            &buf,
+            &mut BmffParser::new(),
+            crate::limits::Limits::default(),
+        );
         let meta = crate::driver::finalize(col, crate::model::FileFormat::Mp4);
         assert!(meta.warnings.is_empty(), "warnings: {:?}", meta.warnings);
         assert_eq!(meta.unified.width, Some(1920));
@@ -1676,7 +1876,11 @@ mod tests {
         let mut f = ftyp_mp4();
         f.extend_from_slice(&box_bytes(b"mdat", &[0u8; 64])); // 大盒被跳过、不缓冲
         f.extend_from_slice(&box_bytes(b"moov", &moov_p));
-        let col = crate::driver::drive_slice(&f, &mut BmffParser::new(), crate::limits::Limits::default());
+        let col = crate::driver::drive_slice(
+            &f,
+            &mut BmffParser::new(),
+            crate::limits::Limits::default(),
+        );
         let meta = crate::driver::finalize(col, crate::model::FileFormat::Mp4);
         assert_eq!(meta.unified.width, Some(640));
         assert_eq!(meta.unified.duration_ms, Some(2000));
@@ -1716,12 +1920,22 @@ mod tests {
         let meta = box_bytes(b"meta", &meta_p);
         let mut f = ftyp_heic();
         f.extend_from_slice(&meta);
-        let col = crate::driver::drive_slice(&f, &mut BmffParser::new(), crate::limits::Limits::default());
+        let col = crate::driver::drive_slice(
+            &f,
+            &mut BmffParser::new(),
+            crate::limits::Limits::default(),
+        );
         let meta = crate::driver::finalize(col, crate::model::FileFormat::Heif);
         assert!(meta.warnings.is_empty(), "warnings: {:?}", meta.warnings);
-        assert!(meta.raw.exif.iter().any(|t| t.tag == 0x010F), "idat 内联 Exif 应被抽到");
-        assert_eq!(meta.unified.camera_make.as_deref(), Some("Acme"),
-            "idat 路径 EXIF 同样须经 normalize 投影至 unified");
+        assert!(
+            meta.raw.exif.iter().any(|t| t.tag == 0x010F),
+            "idat 内联 Exif 应被抽到"
+        );
+        assert_eq!(
+            meta.unified.camera_make.as_deref(),
+            Some("Acme"),
+            "idat 路径 EXIF 同样须经 normalize 投影至 unified"
+        );
     }
 
     #[test]
@@ -1733,7 +1947,11 @@ mod tests {
         moov.extend_from_slice(b"moov");
         moov.extend_from_slice(&[0u8; 12]);
         buf.extend_from_slice(&moov);
-        let col = crate::driver::drive_slice(&buf, &mut BmffParser::new(), crate::limits::Limits::default());
+        let col = crate::driver::drive_slice(
+            &buf,
+            &mut BmffParser::new(),
+            crate::limits::Limits::default(),
+        );
         assert!(col.warnings.iter().any(|w| w.kind == WarnKind::Truncated));
     }
 
@@ -1767,7 +1985,11 @@ mod tests {
         moov.extend_from_slice(b"moov");
         moov.extend_from_slice(&[0u8; 8]);
         buf.extend_from_slice(&moov);
-        let col = crate::driver::drive_slice(&buf, &mut BmffParser::new(), crate::limits::Limits::default());
+        let col = crate::driver::drive_slice(
+            &buf,
+            &mut BmffParser::new(),
+            crate::limits::Limits::default(),
+        );
         assert!(col.warnings.iter().any(|w| w.kind == WarnKind::Truncated));
     }
 
@@ -1830,8 +2052,16 @@ mod tests {
         p.extend_from_slice(&lat_fixed.to_be_bytes());
         p.extend_from_slice(&alt_fixed.to_be_bytes());
         let g = parse_loci(&p).expect("gps");
-        assert!((g.lat_e7 - 275_916_000).abs() <= 20_000, "lat_e7={}", g.lat_e7);
-        assert!((g.lon_e7 - 865_640_000).abs() <= 20_000, "lon_e7={}", g.lon_e7);
+        assert!(
+            (g.lat_e7 - 275_916_000).abs() <= 20_000,
+            "lat_e7={}",
+            g.lat_e7
+        );
+        assert!(
+            (g.lon_e7 - 865_640_000).abs() <= 20_000,
+            "lon_e7={}",
+            g.lon_e7
+        );
         assert!((g.alt_mm.unwrap() - 8_850_000).abs() <= 20_000);
     }
 
@@ -1886,10 +2116,16 @@ mod tests {
     #[test]
     fn parse_qt_meta_harvests_four_keys() {
         let meta = qt_meta_with_keys(&[
-            ("com.apple.quicktime.location.ISO6709", b"+27.5916+086.5640+8850/"),
+            (
+                "com.apple.quicktime.location.ISO6709",
+                b"+27.5916+086.5640+8850/",
+            ),
             ("com.apple.quicktime.make", b"Apple"),
             ("com.apple.quicktime.model", b"iPhone 15"),
-            ("com.apple.quicktime.creationdate", b"2017-07-22T16:06:06+10:00"),
+            (
+                "com.apple.quicktime.creationdate",
+                b"2017-07-22T16:06:06+10:00",
+            ),
         ]);
         let out = parse_qt_mdta(&meta, usize::MAX);
         let g = out.gps.expect("gps");
@@ -1976,7 +2212,11 @@ mod tests {
         let mut f = ftyp_mp4();
         f.extend_from_slice(&box_bytes(b"moov", &moov_p));
 
-        let col = crate::driver::drive_slice(&f, &mut BmffParser::new(), crate::limits::Limits::default());
+        let col = crate::driver::drive_slice(
+            &f,
+            &mut BmffParser::new(),
+            crate::limits::Limits::default(),
+        );
         let meta_out = crate::driver::finalize(col, crate::model::FileFormat::Mov);
         assert_eq!(meta_out.unified.gps.map(|g| g.lat_e7), Some(350_000_000));
         assert_eq!(meta_out.unified.camera_make.as_deref(), Some("Apple"));
@@ -2042,19 +2282,36 @@ mod tests {
         let meta = qt_meta_with_typed_keys(&[
             ("com.apple.quicktime.software", 1, b"13.5.1"),
             ("com.apple.quicktime.author", 1, b"Jane"),
-            ("com.apple.quicktime.camera.focal_length.35mm_equivalent", 22, &28u32.to_be_bytes()),
+            (
+                "com.apple.quicktime.camera.focal_length.35mm_equivalent",
+                22,
+                &28u32.to_be_bytes(),
+            ),
             ("com.apple.quicktime.junkbinary", 13, &[0xFF, 0xD8, 0xFF]), // JPEG 类型 → 跳过
         ]);
         let out = parse_qt_mdta(&meta, usize::MAX);
         let find = |k: &str| out.tags.iter().find(|t| t.key == k);
-        assert!(matches!(find("com.apple.quicktime.software").map(|t| &t.value),
-            Some(Value::Text(s)) if s == "13.5.1"));
-        assert!(matches!(find("com.apple.quicktime.author").map(|t| &t.value),
-            Some(Value::Text(s)) if s == "Jane"));
-        assert!(matches!(find("com.apple.quicktime.camera.focal_length.35mm_equivalent").map(|t| &t.value),
-            Some(Value::U32(28))));
-        assert!(find("com.apple.quicktime.junkbinary").is_none(), "二进制类型不收");
-        assert!(out.tags.iter().all(|t| t.source == ContainerSource::QuickTimeMdta));
+        assert!(
+            matches!(find("com.apple.quicktime.software").map(|t| &t.value),
+            Some(Value::Text(s)) if s == "13.5.1")
+        );
+        assert!(
+            matches!(find("com.apple.quicktime.author").map(|t| &t.value),
+            Some(Value::Text(s)) if s == "Jane")
+        );
+        assert!(matches!(
+            find("com.apple.quicktime.camera.focal_length.35mm_equivalent").map(|t| &t.value),
+            Some(Value::U32(28))
+        ));
+        assert!(
+            find("com.apple.quicktime.junkbinary").is_none(),
+            "二进制类型不收"
+        );
+        assert!(
+            out.tags
+                .iter()
+                .all(|t| t.source == ContainerSource::QuickTimeMdta)
+        );
     }
 
     #[test]
@@ -2069,38 +2326,50 @@ mod tests {
         let udta = box_bytes(b"\xA9swr", &swr_payload);
 
         // meta { mdta software }
-        let meta = qt_meta_with_typed_keys(&[
-            ("com.apple.quicktime.software", 1, b"13.5.1"),
-        ]);
+        let meta = qt_meta_with_typed_keys(&[("com.apple.quicktime.software", 1, b"13.5.1")]);
 
         let mut moov_p = alloc::vec::Vec::new();
         moov_p.extend_from_slice(&box_bytes(b"udta", &udta));
         moov_p.extend_from_slice(&box_bytes(b"meta", &meta));
         let info = parse_moov(&moov_p, 0, usize::MAX);
 
-        let find = |src: ContainerSource, k: &str| info.container_tags.iter()
-            .find(|t| t.source == src && t.key == k);
-        assert!(matches!(find(ContainerSource::Udta, "©swr").map(|t| &t.value),
-            Some(Value::Text(s)) if s == "MyCam 1.0"));
-        assert!(matches!(find(ContainerSource::QuickTimeMdta, "com.apple.quicktime.software").map(|t| &t.value),
-            Some(Value::Text(s)) if s == "13.5.1"));
+        let find = |src: ContainerSource, k: &str| {
+            info.container_tags
+                .iter()
+                .find(|t| t.source == src && t.key == k)
+        };
+        assert!(
+            matches!(find(ContainerSource::Udta, "©swr").map(|t| &t.value),
+            Some(Value::Text(s)) if s == "MyCam 1.0")
+        );
+        assert!(
+            matches!(find(ContainerSource::QuickTimeMdta, "com.apple.quicktime.software").map(|t| &t.value),
+            Some(Value::Text(s)) if s == "13.5.1")
+        );
     }
 
     #[test]
     fn end_to_end_mov_container_tags_reach_raw() {
-        let meta = qt_meta_with_typed_keys(&[
-            ("com.apple.quicktime.software", 1, b"13.5.1"),
-        ]);
+        let meta = qt_meta_with_typed_keys(&[("com.apple.quicktime.software", 1, b"13.5.1")]);
         let mut moov_p = alloc::vec::Vec::new();
         moov_p.extend_from_slice(&box_bytes(b"meta", &meta));
         let mut f = ftyp_mp4();
         f.extend_from_slice(&box_bytes(b"moov", &moov_p));
 
-        let col = crate::driver::drive_slice(&f, &mut BmffParser::new(), crate::limits::Limits::default());
+        let col = crate::driver::drive_slice(
+            &f,
+            &mut BmffParser::new(),
+            crate::limits::Limits::default(),
+        );
         let meta_out = crate::driver::finalize(col, crate::model::FileFormat::Mov);
-        assert!(meta_out.raw.container.iter().any(|t|
-            t.key == "com.apple.quicktime.software"
-            && matches!(&t.value, crate::model::Value::Text(s) if s == "13.5.1")));
+        assert!(
+            meta_out
+                .raw
+                .container
+                .iter()
+                .any(|t| t.key == "com.apple.quicktime.software"
+                    && matches!(&t.value, crate::model::Value::Text(s) if s == "13.5.1"))
+        );
     }
 
     // ── Finding #2: ©xyz 不得泄漏进 container_tags ──────────────────────────
@@ -2121,9 +2390,12 @@ mod tests {
         let mut moov_p = alloc::vec::Vec::new();
         moov_p.extend_from_slice(&box_bytes(b"udta", &udta));
         let info = parse_moov(&moov_p, 0, usize::MAX);
-        assert!(info.container_tags.iter().all(|t|
-            !(t.source == ContainerSource::Udta && t.key == "©xyz")),
-            "©xyz 不得进入 container_tags");
+        assert!(
+            info.container_tags
+                .iter()
+                .all(|t| !(t.source == ContainerSource::Udta && t.key == "©xyz")),
+            "©xyz 不得进入 container_tags"
+        );
     }
 
     // ── Finding #1: source-cap tests ─────────────────────────────────────────
@@ -2131,13 +2403,23 @@ mod tests {
     fn parse_qt_mdta_caps_tags_at_budget() {
         // 10 个文本键，预算 3 → out.tags 不超过 3。
         let items: alloc::vec::Vec<(alloc::string::String, u32, &[u8])> = (0..10u32)
-            .map(|i| (alloc::format!("com.apple.quicktime.k{i}"), 1u32, b"v" as &[u8]))
+            .map(|i| {
+                (
+                    alloc::format!("com.apple.quicktime.k{i}"),
+                    1u32,
+                    b"v" as &[u8],
+                )
+            })
             .collect();
         let refs: alloc::vec::Vec<(&str, u32, &[u8])> =
             items.iter().map(|(k, t, v)| (k.as_str(), *t, *v)).collect();
         let meta = qt_meta_with_typed_keys(&refs);
         let out = parse_qt_mdta(&meta, 3);
-        assert!(out.tags.len() <= 3, "源头封顶：out.tags={} 应 ≤ 3", out.tags.len());
+        assert!(
+            out.tags.len() <= 3,
+            "源头封顶：out.tags={} 应 ≤ 3",
+            out.tags.len()
+        );
     }
 
     #[test]
@@ -2157,7 +2439,11 @@ mod tests {
         let mut moov_p = alloc::vec::Vec::new();
         moov_p.extend_from_slice(&box_bytes(b"udta", &udta));
         let info = parse_moov(&moov_p, 0, 2);
-        assert!(info.container_tags.len() <= 2, "udta 源头封顶 ≤ 2，实际 {}", info.container_tags.len());
+        assert!(
+            info.container_tags.len() <= 2,
+            "udta 源头封顶 ≤ 2，实际 {}",
+            info.container_tags.len()
+        );
     }
 
     #[test]
@@ -2172,6 +2458,10 @@ mod tests {
             moov_p.extend_from_slice(&box_bytes(b"meta", &meta));
         }
         let info = parse_moov(&moov_p, 0, 3);
-        assert!(info.container_tags.len() <= 3, "跨多 meta 盒仍受预算限，实际 {}", info.container_tags.len());
+        assert!(
+            info.container_tags.len() <= 3,
+            "跨多 meta 盒仍受预算限，实际 {}",
+            info.container_tags.len()
+        );
     }
 }

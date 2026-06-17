@@ -1,6 +1,6 @@
 //! Stripper 集成测试：幂等、多格式回环、默认/aggressive 双路、合成边界。
 
-use omni_meta::{read_slice, strip_slice, Options, StripOptions};
+use omni_meta::{Options, StripOptions, read_slice, strip_slice};
 
 /// JPEG with APP0 + APP1(Exif, Orientation=6) + SOF0(8x8) + SOS + EOI.
 fn jpeg_fixture() -> Vec<u8> {
@@ -47,10 +47,16 @@ fn jpeg_default_is_idempotent() {
 fn jpeg_default_keeps_orientation_drops_privacy() {
     let j = jpeg_fixture();
     let before = read_slice(&j, Options::default()).unwrap();
-    assert_eq!(before.unified.orientation, Some(omni_meta::Orientation::Rotate90));
+    assert_eq!(
+        before.unified.orientation,
+        Some(omni_meta::Orientation::Rotate90)
+    );
     let (out, _) = strip_slice(&j, StripOptions::default()).unwrap();
     let after = read_slice(&out, Options::default()).unwrap();
-    assert_eq!(after.unified.orientation, Some(omni_meta::Orientation::Rotate90));
+    assert_eq!(
+        after.unified.orientation,
+        Some(omni_meta::Orientation::Rotate90)
+    );
     assert_eq!(after.unified.width, Some(8));
     assert_eq!(after.unified.height, Some(8));
 }
@@ -71,6 +77,10 @@ fn jpeg_exif_without_orientation_synthesizes_nothing() {
     let j = jpeg_exif_without_orientation();
     let (out, _) = strip_slice(&j, StripOptions::default()).unwrap();
     let after = read_slice(&out, Options::default()).unwrap();
-    assert!(after.raw.exif.is_empty(), "无 orientation 时不应合成 EXIF: {:?}", after.raw.exif);
+    assert!(
+        after.raw.exif.is_empty(),
+        "无 orientation 时不应合成 EXIF: {:?}",
+        after.raw.exif
+    );
     assert_eq!(after.unified.orientation, None);
 }

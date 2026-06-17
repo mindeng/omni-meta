@@ -3,10 +3,10 @@
 use alloc::vec::Vec;
 
 use crate::adapters::slice::Options;
-use crate::driver::{finalize, Outcome, StreamDriver};
+use crate::driver::{Outcome, StreamDriver, finalize};
 use crate::error::Error;
 use crate::model::{FileFormat, Metadata};
-use crate::probe::{parser_for, probe, PROBE_MAX};
+use crate::probe::{PROBE_MAX, parser_for, probe};
 
 /// push 适配器：调用者反复 `feed` 字节、按 `Outcome` 决定下一步，最后 `finish`。
 /// 探测格式需要前 PROBE_MAX 字节；在凑齐前 `feed` 累积到内部预缓冲。
@@ -96,7 +96,7 @@ impl PushParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::slice::{read_slice, Options};
+    use crate::adapters::slice::{Options, read_slice};
     use alloc::vec::Vec;
 
     fn make_tiff() -> Vec<u8> {
@@ -133,7 +133,11 @@ mod tests {
     }
 
     /// 以固定 chunk 大小喂完整字节，忽略 SkipHint（driver 内部吞掉）。
-    fn push_drive(bytes: &[u8], opts: Options, chunk: usize) -> Result<crate::model::Metadata, crate::error::Error> {
+    fn push_drive(
+        bytes: &[u8],
+        opts: Options,
+        chunk: usize,
+    ) -> Result<crate::model::Metadata, crate::error::Error> {
         let mut p = PushParser::new(opts);
         let mut i = 0;
         while i < bytes.len() {
