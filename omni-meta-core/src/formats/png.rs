@@ -1,6 +1,8 @@
 //! PNG chunk 遍历（增量状态机）：8 字节签名后逐 chunk 推进。
-//! IHDR 发 Width/Height；eXIf 发 Exif 载荷；iTXt(XML:com.adobe.xmp，未压缩)发 Xmp 载荷；
-//! 压缩文本块（flag=1）告警并跳过；IEND 发 Done；其余 chunk Skip(len+crc)。
+//! IHDR 发 Width/Height；eXIf 发 Exif 载荷；iTXt(XML:com.adobe.xmp，未压缩)发 Xmp 载荷。
+//! 文本关键字 → Text 事件入 RawTags.text：tEXt→Latin1、非 XMP 未压缩 iTXt→Utf8、
+//! zTXt→CompressedLatin1、压缩 iTXt→CompressedUtf8（压缩块保留原始字节、不解压不报警）；
+//! iTXt 非法 UTF-8 或 keyword>79 → UnrecognizedValue。IEND 发 Done；其余 chunk Skip(len+crc)。
 
 use alloc::string::String;
 use alloc::vec::Vec;
