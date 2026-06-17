@@ -109,6 +109,7 @@ pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
         exif: col.exif,
         xmp: col.xmp,
         container: col.container,
+        text: alloc::vec::Vec::new(), // Task 2 替换为 col.text
     };
     let mut warnings = col.warnings;
     let mut unified = normalize(&raw, &mut warnings);

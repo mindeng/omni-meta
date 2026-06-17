@@ -127,6 +127,30 @@ pub struct XmpProperty {
     pub value: String,
 }
 
+/// PNG 文本块（tEXt/iTXt/zTXt）的一条 keyword→value。
+/// keyword 在四种块里都是明文，故始终可读；value 的载体/编码/压缩状态
+/// 由 `TextValue` 单一表达——不单设 source 字段（避免与 value 变体冲突）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextTag {
+    pub keyword: String,
+    pub value: TextValue,
+}
+
+/// 文本值，自描述其编码与压缩状态。
+/// 压缩变体仅保留原始压缩字节（本库零依赖、不解压）；上层可按变体决定
+/// 解压后用 Latin-1 还是 UTF-8 解码。未来解压走独立 feature-gated crate。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextValue {
+    /// tEXt：Latin-1 已逐字节无损映射为 UTF-8 String（永不失败）。
+    Latin1(String),
+    /// iTXt 未压缩、非 XMP：原生 UTF-8。
+    Utf8(String),
+    /// zTXt：zlib 压缩字节，未解压；解压后应按 Latin-1 解码。
+    CompressedLatin1(Vec<u8>),
+    /// 压缩 iTXt：zlib 压缩字节，未解压；解压后应按 UTF-8 解码。
+    CompressedUtf8(Vec<u8>),
+}
+
 /// EXIF IFD 来源标识。raw 层据此记录每条标签所属的 IFD。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IfdKind {
@@ -151,6 +175,7 @@ pub struct RawTags {
     pub exif: Vec<ExifTag>,
     pub xmp: Vec<XmpProperty>,
     pub container: Vec<ContainerTag>,
+    pub text: Vec<TextTag>,
 }
 
 /// 统一规范层。全部 Option —— 缺失即 None，绝不臆造。
@@ -166,6 +191,9 @@ pub struct Unified {
     pub gps: Option<Gps>,
     pub software: Option<String>,
     pub creator: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub copyright: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -401,5 +429,37 @@ mod tests {
         let u = Unified::default();
         assert!(u.software.is_none());
         assert!(u.creator.is_none());
+    }
+
+    #[test]
+    fn text_tag_constructs_and_value_variants() {
+        let t = TextTag {
+            keyword: String::from("Author"),
+            value: TextValue::Latin1(String::from("Ada")),
+        };
+        assert_eq!(t.keyword, "Author");
+        assert_eq!(t.value, TextValue::Latin1(String::from("Ada")));
+        assert_ne!(
+            TextValue::Utf8(String::from("x")),
+            TextValue::Latin1(String::from("x"))
+        );
+        assert_ne!(
+            TextValue::CompressedLatin1(alloc::vec![1, 2]),
+            TextValue::CompressedUtf8(alloc::vec![1, 2])
+        );
+    }
+
+    #[test]
+    fn rawtags_default_has_empty_text() {
+        let r = RawTags::default();
+        assert!(r.text.is_empty());
+    }
+
+    #[test]
+    fn unified_has_title_description_copyright_default_none() {
+        let u = Unified::default();
+        assert!(u.title.is_none());
+        assert!(u.description.is_none());
+        assert!(u.copyright.is_none());
     }
 }

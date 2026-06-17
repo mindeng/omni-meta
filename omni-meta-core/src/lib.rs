@@ -28,7 +28,7 @@ pub use error::Error;
 pub use limits::Limits;
 pub use model::{
     ContainerSource, ContainerTag, DateTimeParts, ExifTag, FileFormat, Gps, IfdKind, Metadata,
-    Orientation, RawTags, Unified, Value, WarnKind, Warning, XmpProperty,
+    Orientation, RawTags, TextTag, TextValue, Unified, Value, WarnKind, Warning, XmpProperty,
 };
 pub use strip::{RemovedKind, RemovedKinds, StripOptions, StripReport};
 

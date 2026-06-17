@@ -568,6 +568,7 @@ mod tests {
             ]),
             xmp: Vec::new(),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut warnings = Vec::new();
         let u = normalize(&raw, &mut warnings);
@@ -587,6 +588,7 @@ mod tests {
             }]),
             xmp: Vec::new(),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut warnings = Vec::new();
         let u = normalize(&raw, &mut warnings);
@@ -615,6 +617,7 @@ mod tests {
                 xmp("tiff", "ImageLength", "720"),
             ]),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut warnings = Vec::new();
         let u = normalize(&raw, &mut warnings);
@@ -635,6 +638,7 @@ mod tests {
             }]),
             xmp: Vec::from([xmp("tiff", "Make", "XmpMake")]),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut warnings = Vec::new();
         let u = normalize(&raw, &mut warnings);
@@ -660,6 +664,7 @@ mod tests {
             ]),
             xmp: Vec::new(),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut warnings = Vec::new();
         let u = normalize(&raw, &mut warnings);
@@ -681,6 +686,7 @@ mod tests {
             exif: Vec::from([exif_tag(IfdKind::Exif, 0x9003, "2003:01:24 09:20:00")]),
             xmp: Vec::new(),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut w = Vec::new();
         let u = normalize(&raw, &mut w);
@@ -701,6 +707,7 @@ mod tests {
             ]),
             xmp: Vec::new(),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut w = Vec::new();
         let u = normalize(&raw, &mut w);
@@ -716,6 +723,7 @@ mod tests {
             ]),
             xmp: Vec::new(),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut w = Vec::new();
         let u = normalize(&raw, &mut w);
@@ -733,6 +741,7 @@ mod tests {
             ]),
             xmp: Vec::new(),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut w = Vec::new();
         let u = normalize(&raw, &mut w);
@@ -752,6 +761,7 @@ mod tests {
                 exif: Vec::from([exif_tag(IfdKind::Exif, 0x9003, bad)]),
                 xmp: Vec::new(),
                 container: Vec::new(),
+                text: Vec::new(),
             };
             let mut w = Vec::new();
             let u = normalize(&raw, &mut w);
@@ -807,6 +817,7 @@ mod tests {
             ]),
             xmp: Vec::new(),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut w = Vec::new();
         let g = normalize(&raw, &mut w).gps.expect("gps");
@@ -852,6 +863,7 @@ mod tests {
             ]),
             xmp: Vec::new(),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut w = Vec::new();
         let g = normalize(&raw, &mut w).gps.expect("gps");
@@ -877,6 +889,7 @@ mod tests {
             ]),
             xmp: Vec::new(),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut w = Vec::new();
         let u = normalize(&raw, &mut w);
@@ -907,6 +920,7 @@ mod tests {
                 xmp_p("exif", "GPSLongitude", "116,23.4000E"),
             ]),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut w = Vec::new();
         let g = normalize(&raw, &mut w).gps.expect("gps");
@@ -988,6 +1002,7 @@ mod tests {
                 xmp_p("exif", "GPSLongitude", "116,23.4000E"),
             ]),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut w = Vec::new();
         let g = normalize(&raw, &mut w).gps.expect("gps");
@@ -1004,6 +1019,7 @@ mod tests {
                 xmp_p("exif", "GPSLongitude", "116.3900E"),
             ]),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut w = Vec::new();
         let g = normalize(&raw, &mut w).gps.expect("gps");
@@ -1021,6 +1037,7 @@ mod tests {
                 xmp_p("exif", "GPSLongitude", "116,23.4000E"),
             ]),
             container: Vec::new(),
+            text: Vec::new(),
         };
         let mut w = Vec::new();
         let g = normalize(&raw, &mut w).gps.expect("gps");
@@ -1048,6 +1065,7 @@ mod tests {
                 key: alloc::string::String::from("com.apple.quicktime.software"),
                 value: Value::Text(alloc::string::String::from("ContainerSW"))
             }],
+            text: Vec::new(),
         };
         let u = normalize(&raw, &mut warnings);
         assert_eq!(u.software.as_deref(), Some("ContainerSW"));
@@ -1065,6 +1083,7 @@ mod tests {
             }],
             xmp: Vec::new(),
             container: Vec::new(),
+            text: Vec::new(),
         };
         assert_eq!(
             normalize(&raw_exif, &mut warnings).software.as_deref(),
@@ -1078,6 +1097,7 @@ mod tests {
                 value: alloc::string::String::from("XmpSW")
             }],
             container: Vec::new(),
+            text: Vec::new(),
         };
         assert_eq!(
             normalize(&raw_xmp, &mut warnings).software.as_deref(),
@@ -1097,6 +1117,7 @@ mod tests {
                 key: alloc::string::String::from("©aut"),
                 value: Value::Text(alloc::string::String::from("Auteur"))
             }],
+            text: Vec::new(),
         };
         assert_eq!(
             normalize(&raw_udta, &mut warnings).creator.as_deref(),
@@ -1110,6 +1131,7 @@ mod tests {
             }],
             xmp: Vec::new(),
             container: Vec::new(),
+            text: Vec::new(),
         };
         assert_eq!(
             normalize(&raw_artist, &mut warnings).creator.as_deref(),
