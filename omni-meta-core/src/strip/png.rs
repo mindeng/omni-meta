@@ -106,6 +106,7 @@ fn classify(ctype: &[u8], data: &[u8], opts: &StripOptions) -> Option<(RemovedKi
     match ctype {
         b"eXIf" => Some((RemovedKind::Exif, true)),
         b"iTXt" | b"tEXt" | b"zTXt" => {
+            // 注：XMP 仅以 iTXt 承载，tEXt/zTXt 永不命中下面的 XMP 分支（死枝，保留以统一形态）。
             if data.starts_with(b"XML:com.adobe.xmp") {
                 Some((RemovedKind::Xmp, false))
             } else {
@@ -228,5 +229,37 @@ mod tests {
             first, second,
             "default strip must be idempotent (byte-equal on second pass)"
         );
+    }
+
+    #[test]
+    fn default_strips_text_chunks_with_pii() {
+        let mut p = alloc::vec::Vec::new();
+        p.extend_from_slice(&SIG);
+        p.extend_from_slice(&ihdr(4, 4));
+        // tEXt Author=PII
+        let mut te = alloc::vec::Vec::new();
+        te.extend_from_slice(b"Author");
+        te.push(0);
+        te.extend_from_slice(b"Jane Secret");
+        p.extend_from_slice(&chunk(b"tEXt", &te));
+        // zTXt Comment=<伪压缩字节>
+        let mut zt = alloc::vec::Vec::new();
+        zt.extend_from_slice(b"Comment");
+        zt.push(0);
+        zt.push(0); // compmethod
+        zt.extend_from_slice(&[0x78, 0x9c, 1, 2, 3]);
+        p.extend_from_slice(&chunk(b"zTXt", &zt));
+        p.extend_from_slice(&chunk(b"IDAT", &[1, 2, 3, 4]));
+        p.extend_from_slice(&chunk(b"IEND", &[]));
+
+        let (out, report) = run(&p, StripOptions::default());
+        assert!(!out.windows(6).any(|w| w == b"Author"), "tEXt Author 应被剥离");
+        assert!(!out.windows(11).any(|w| w == b"Jane Secret"), "PII 值应被剥离");
+        assert!(!out.windows(4).any(|w| w == b"tEXt"));
+        assert!(!out.windows(4).any(|w| w == b"zTXt"));
+        assert!(report.removed.contains(RemovedKind::Other));
+        // 幂等
+        let (again, _) = run(&out, StripOptions::default());
+        assert_eq!(out, again);
     }
 }
