@@ -70,6 +70,21 @@ fn assert_raw_subset(name: &str, exp: &[GoldenRawTag], raw: &RawTags) {
                     raw.container
                 );
             }
+            GoldenRawTag::Text { keyword, value } => {
+                let hit = raw.text.iter().any(|t| {
+                    t.keyword == *keyword
+                        && matches!(
+                            &t.value,
+                            omni_meta::TextValue::Latin1(s) | omni_meta::TextValue::Utf8(s)
+                            if s == *value
+                        )
+                });
+                assert!(
+                    hit,
+                    "[{name}] 缺文本标签 {keyword}={value}\n实际 text={:?}",
+                    raw.text
+                );
+            }
         }
     }
 }

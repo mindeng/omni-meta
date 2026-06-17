@@ -21,6 +21,10 @@ pub enum GoldenRawTag {
         key: &'static str,
         value: Value,
     },
+    Text {
+        keyword: &'static str,
+        value: &'static str, // 仅明文变体（Latin1/Utf8）可断言
+    },
 }
 
 /// 一个黄金样本：真实字节 + 期望格式 + 期望 Unified 子集（None 字段=不约束）+ raw 子集。
@@ -75,10 +79,10 @@ fn jpeg_exif_gps() -> GoldenSample {
 }
 
 fn png_exif() -> GoldenSample {
-    // 注：exiftool `-Make=OmniTest` 在 PNG 上写的是 PNG `tEXt`（keyword="Make"，组 [PNG]），
-    // 而非 EXIF `eXIf` chunk —— 本文件根本没有 eXIf。exiftool 读回也归类为 [PNG] Make，非 [EXIF]。
-    // omni-meta 仅把 eXIf/iTXt(XMP) 视为元数据，按设计忽略 PNG tEXt 关键字，故无 EXIF Make/camera_make。
-    // 这是「设计非投影 (C)」而非冲突：文件里确实没有 EXIF。XMP dc:creator 则忠实解析。
+    // exiftool `-Make=OmniTest` 在 PNG 上写的是 `tEXt`（keyword="Make"，组 [PNG]），非 eXIf。
+    // 自 PNG 文本关键字里程碑起，omni-meta 读取 tEXt → RawTags.text（此处断言 Make 可读出，
+    // 兑现 commit f644533 记录的缺口）。Make 不投影 camera_make（仅 Author/Software/
+    // Creation Time 等投影），故 unified.camera_make 仍缺失。XMP dc:creator 照常解析。
     GoldenSample {
         name: "png_exif",
         bytes: include_bytes!("../samples/png_exif.png"),
@@ -89,11 +93,10 @@ fn png_exif() -> GoldenSample {
             creator: Some("GoldenAuthor".into()),
             ..Default::default()
         },
-        raw_subset: vec![GoldenRawTag::Xmp {
-            prefix: "dc",
-            name: "creator",
-            value: "GoldenAuthor",
-        }],
+        raw_subset: vec![
+            GoldenRawTag::Xmp { prefix: "dc", name: "creator", value: "GoldenAuthor" },
+            GoldenRawTag::Text { keyword: "Make", value: "OmniTest" },
+        ],
     }
 }
 
