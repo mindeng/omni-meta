@@ -5,8 +5,10 @@
 // 在构建过程中暂允许 dead_code，待 T11 全部接入后移除本属性。
 #![allow(dead_code)]
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
+use crate::error::Error;
 use crate::limits::Limits;
 use crate::model::{FileFormat, Warning};
 
@@ -180,6 +182,20 @@ pub(crate) fn drive_strip_slice(
         }
     }
     (out, report)
+}
+
+/// 按格式选 walker。仅 JPEG/PNG/WebP 支持；其余已识别格式 → Unsupported。
+pub(crate) fn planner_for(
+    fmt: &FileFormat,
+    opts: StripOptions,
+) -> Result<Box<dyn StripPlanner>, Error> {
+    match fmt {
+        FileFormat::Jpeg => Ok(Box::new(jpeg::JpegStripper::new(opts))),
+        FileFormat::Png => Ok(Box::new(png::PngStripper::new(opts))),
+        FileFormat::Webp => Ok(Box::new(webp::WebpStripper::new(opts))),
+        FileFormat::Unknown => Err(Error::UnrecognizedFormat),
+        _ => Err(Error::Unsupported),
+    }
 }
 
 #[cfg(test)]

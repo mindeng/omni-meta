@@ -22,6 +22,8 @@ pub(crate) mod strip;
 
 pub use adapters::push::PushParser;
 pub use adapters::slice::{read_slice, Options};
+pub use adapters::strip_slice::strip_slice;
+pub use strip::{RemovedKind, RemovedKinds, StripOptions, StripReport};
 pub use driver::Outcome;
 pub use error::Error;
 pub use limits::Limits;
