@@ -321,9 +321,18 @@ fn parse_rfc1123(s: &str) -> Option<DateTimeParts> {
         Some(v)
     };
     let month = match &b[8..11] {
-        b"Jan" => 1, b"Feb" => 2, b"Mar" => 3, b"Apr" => 4,
-        b"May" => 5, b"Jun" => 6, b"Jul" => 7, b"Aug" => 8,
-        b"Sep" => 9, b"Oct" => 10, b"Nov" => 11, b"Dec" => 12,
+        b"Jan" => 1,
+        b"Feb" => 2,
+        b"Mar" => 3,
+        b"Apr" => 4,
+        b"May" => 5,
+        b"Jun" => 6,
+        b"Jul" => 7,
+        b"Aug" => 8,
+        b"Sep" => 9,
+        b"Oct" => 10,
+        b"Nov" => 11,
+        b"Dec" => 12,
         _ => return None,
     };
     let day = two(5)?;
@@ -1259,18 +1268,38 @@ mod tests {
     #[test]
     fn png_new_fields_project() {
         let mut w = Vec::new();
-        assert_eq!(normalize(&raw_with_text("Title", "T"), &mut w).title.as_deref(), Some("T"));
-        assert_eq!(normalize(&raw_with_text("Description", "D"), &mut w).description.as_deref(), Some("D"));
-        assert_eq!(normalize(&raw_with_text("Copyright", "C"), &mut w).copyright.as_deref(), Some("C"));
+        assert_eq!(
+            normalize(&raw_with_text("Title", "T"), &mut w)
+                .title
+                .as_deref(),
+            Some("T")
+        );
+        assert_eq!(
+            normalize(&raw_with_text("Description", "D"), &mut w)
+                .description
+                .as_deref(),
+            Some("D")
+        );
+        assert_eq!(
+            normalize(&raw_with_text("Copyright", "C"), &mut w)
+                .copyright
+                .as_deref(),
+            Some("C")
+        );
     }
 
     #[test]
     fn png_creator_does_not_override_xmp() {
         let raw = RawTags {
             xmp: alloc::vec![crate::model::XmpProperty {
-                prefix: "dc".into(), name: "creator".into(), value: "FromXmp".into(),
+                prefix: "dc".into(),
+                name: "creator".into(),
+                value: "FromXmp".into(),
             }],
-            text: alloc::vec![crate::model::TextTag { keyword: "Author".into(), value: crate::model::TextValue::Latin1("FromPng".into()) }],
+            text: alloc::vec![crate::model::TextTag {
+                keyword: "Author".into(),
+                value: crate::model::TextValue::Latin1("FromPng".into())
+            }],
             ..Default::default()
         };
         let mut w = Vec::new();
@@ -1294,7 +1323,10 @@ mod tests {
     #[test]
     fn png_creation_time_unparseable_stays_raw_no_warning() {
         let mut w = Vec::new();
-        let u = normalize(&raw_with_text("Creation Time", "sometime last summer"), &mut w);
+        let u = normalize(
+            &raw_with_text("Creation Time", "sometime last summer"),
+            &mut w,
+        );
         assert!(u.created.is_none());
         assert!(w.is_empty());
     }

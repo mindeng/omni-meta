@@ -253,8 +253,14 @@ mod tests {
         p.extend_from_slice(&chunk(b"IEND", &[]));
 
         let (out, report) = run(&p, StripOptions::default());
-        assert!(!out.windows(6).any(|w| w == b"Author"), "tEXt Author 应被剥离");
-        assert!(!out.windows(11).any(|w| w == b"Jane Secret"), "PII 值应被剥离");
+        assert!(
+            !out.windows(6).any(|w| w == b"Author"),
+            "tEXt Author 应被剥离"
+        );
+        assert!(
+            !out.windows(11).any(|w| w == b"Jane Secret"),
+            "PII 值应被剥离"
+        );
         assert!(!out.windows(4).any(|w| w == b"tEXt"));
         assert!(!out.windows(4).any(|w| w == b"zTXt"));
         assert!(report.removed.contains(RemovedKind::Other));

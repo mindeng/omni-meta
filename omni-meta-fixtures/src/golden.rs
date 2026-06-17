@@ -94,8 +94,15 @@ fn png_exif() -> GoldenSample {
             ..Default::default()
         },
         raw_subset: vec![
-            GoldenRawTag::Xmp { prefix: "dc", name: "creator", value: "GoldenAuthor" },
-            GoldenRawTag::Text { keyword: "Make", value: "OmniTest" },
+            GoldenRawTag::Xmp {
+                prefix: "dc",
+                name: "creator",
+                value: "GoldenAuthor",
+            },
+            GoldenRawTag::Text {
+                keyword: "Make",
+                value: "OmniTest",
+            },
         ],
     }
 }

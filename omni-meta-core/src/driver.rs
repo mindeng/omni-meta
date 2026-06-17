@@ -1245,7 +1245,11 @@ mod tests {
                     value: TextValue::Latin1(alloc::string::String::from("Ada")),
                 })];
                 self.0 = true;
-                PullResult { demand: Demand::Done, consumed: 0, events }
+                PullResult {
+                    demand: Demand::Done,
+                    consumed: 0,
+                    events,
+                }
             }
         }
 
@@ -1271,10 +1275,17 @@ mod tests {
                         value: TextValue::Utf8(alloc::string::String::from("v")),
                     }));
                 }
-                PullResult { demand: Demand::Done, consumed: 0, events }
+                PullResult {
+                    demand: Demand::Done,
+                    consumed: 0,
+                    events,
+                }
             }
         }
-        let limits = crate::limits::Limits { max_tags: 3, ..crate::limits::Limits::default() };
+        let limits = crate::limits::Limits {
+            max_tags: 3,
+            ..crate::limits::Limits::default()
+        };
         let mut p = Flood;
         let col = crate::driver::drive_slice(&[0u8; 4], &mut p, limits);
         let meta = crate::driver::finalize(col, crate::model::FileFormat::Png);

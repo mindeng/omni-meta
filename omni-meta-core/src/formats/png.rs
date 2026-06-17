@@ -363,7 +363,11 @@ mod tests {
         p.extend_from_slice(&text_chunk(&long_kw, b"v"));
         p.extend_from_slice(&chunk(b"IEND", &[]));
         let col = collect(&p);
-        assert!(col.warnings.iter().any(|w| w.kind == WarnKind::UnrecognizedValue));
+        assert!(
+            col.warnings
+                .iter()
+                .any(|w| w.kind == WarnKind::UnrecognizedValue)
+        );
         let meta = crate::driver::finalize(col, crate::model::FileFormat::Png);
         assert!(meta.raw.text.is_empty());
     }
@@ -423,7 +427,11 @@ mod tests {
         p.extend_from_slice(&itxt(b"Comment", false, &[0xFF, 0xFE]));
         p.extend_from_slice(&chunk(b"IEND", &[]));
         let col = collect(&p);
-        assert!(col.warnings.iter().any(|w| w.kind == WarnKind::UnrecognizedValue));
+        assert!(
+            col.warnings
+                .iter()
+                .any(|w| w.kind == WarnKind::UnrecognizedValue)
+        );
         let meta = crate::driver::finalize(col, crate::model::FileFormat::Png);
         assert!(meta.raw.text.is_empty());
     }
@@ -436,7 +444,11 @@ mod tests {
         p.extend_from_slice(&itxt(b"Description", true, &[0x78, 0x9c, 1, 2, 3]));
         p.extend_from_slice(&chunk(b"IEND", &[]));
         let col = collect(&p);
-        assert!(!col.warnings.iter().any(|w| w.kind == WarnKind::CompressedChunkSkipped));
+        assert!(
+            !col.warnings
+                .iter()
+                .any(|w| w.kind == WarnKind::CompressedChunkSkipped)
+        );
         let meta = crate::driver::finalize(col, crate::model::FileFormat::Png);
         assert!(meta.raw.text.iter().any(|t| t.keyword == "Description"
             && matches!(t.value, crate::model::TextValue::CompressedUtf8(_))));
@@ -471,7 +483,11 @@ mod tests {
         p.extend_from_slice(&ztxt(b"Comment", &[0x78, 0x9c, 9, 8, 7]));
         p.extend_from_slice(&chunk(b"IEND", &[]));
         let col = collect(&p);
-        assert!(!col.warnings.iter().any(|w| w.kind == WarnKind::CompressedChunkSkipped));
+        assert!(
+            !col.warnings
+                .iter()
+                .any(|w| w.kind == WarnKind::CompressedChunkSkipped)
+        );
         let meta = crate::driver::finalize(col, crate::model::FileFormat::Png);
         assert!(meta.raw.text.iter().any(|t| t.keyword == "Comment"
             && matches!(t.value, crate::model::TextValue::CompressedLatin1(_))));
