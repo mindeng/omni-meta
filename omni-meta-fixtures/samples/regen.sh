@@ -13,7 +13,7 @@ exiftool -overwrite_original \
   -GPSLongitudeRef=E -GPSLongitude=139.5 \
   jpeg_exif_gps.jpg
 
-# ---- PNG: 80x60 + eXIf(Make) + XMP(dc:creator) ----
+# ---- PNG: 80x60 + Make（注：exiftool 写入 PNG tEXt keyword，非 eXIf chunk → omni-meta 有意不投影，见 README 缺口①）+ XMP(dc:creator) ----
 ffmpeg -y -f lavfi -i color=c=green:s=80x60 -frames:v 1 png_exif.png
 exiftool -overwrite_original -Make=OmniTest -XMP-dc:Creator=GoldenAuthor png_exif.png
 

@@ -43,6 +43,6 @@ jobs:
         with:
           workspaces: fuzz
       - name: install cargo-fuzz
-        run: cargo install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
       - name: build fuzz targets
         run: cd fuzz && cargo +nightly fuzz build
