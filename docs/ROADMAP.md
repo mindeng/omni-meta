@@ -32,6 +32,7 @@
 | **适配器（4 条）** | `read_slice` / `push` / `read_blocking` / `read_seek` | — |
 | 测试基座 | 四适配器差分一致性（含完整 HEIC meta+mdat 的 SeekTo 抽取）+ 各 codec/格式单测 | `535fb90` `d4f5b42` `d4dccd4` |
 | **QuickTime 容器标签** | `RawTags.container`（mdta 文本键 / udta `©`-atoms / focal length）+ `software`/`creator` 投影（容器>EXIF>XMP，≥2 来源） | 本次分支 |
+| **Stripper (F)** | JPEG/PNG/WebP 剥离 EXIF/XMP/IPTC，默认保留 ICC/orientation（最小 EXIF 合成）；`strip_slice`/`strip_blocking`；`StripOptions::aggressive()` 全删；slice↔blocking 字节级一致 + fuzz target | 本次分支 |
 
 ### 当前 Unified 字段
 
@@ -48,7 +49,7 @@
 
 ### 尚未开始 ⬜
 
-IPTC codec · ICC 摘要 · TIFF 顶层格式 · async/tokio 适配器 · Stripper（剥离）· `video_codec`/`audio_codec` 等 Unified 字段扩展 · `cargo-fuzz`（横切，各容器/codec）
+IPTC codec · ICC 摘要 · TIFF 顶层格式 · async/tokio 适配器 · `video_codec`/`audio_codec` 等 Unified 字段扩展 · `cargo-fuzz`（横切，各容器/codec）
 
 ---
 
@@ -131,11 +132,11 @@ IPTC codec · ICC 摘要 · TIFF 顶层格式 · async/tokio 适配器 · Stripp
 - [ ] `codecs/icc.rs`：只取摘要（color space / profile description），不解全 profile
 - [ ] JPEG APP2 多段拼接、PNG `iCCP`、BMFF `colr` box
 
-### 里程碑 F — Stripper（唯一"写"路径）
+### 里程碑 F — Stripper（唯一"写"路径）✅ 完成 — 设计 `specs/2026-06-17-omni-meta-stripper-design.md` / 计划 `plans/2026-06-17-omni-meta-stripper.md`
 
-- [ ] `strip.rs`：sans-io 重写状态机，复用容器读取器，丢弃 EXIF/XMP/IPTC/ICC
-- [ ] `strip_blocking` + `StripReport`
-- [ ] 优先 JPEG/PNG/WebP（隐私场景最常用）；box 类作为 stretch
+- [x] `strip.rs`：sans-io 重写状态机，复用容器读取器，丢弃 EXIF/XMP/IPTC/ICC
+- [x] `strip_blocking` + `StripReport`
+- [x] 优先 JPEG/PNG/WebP（隐私场景最常用）；box 类作为 stretch
 
 ---
 
