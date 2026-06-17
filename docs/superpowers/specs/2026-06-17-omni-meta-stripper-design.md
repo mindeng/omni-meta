@@ -85,31 +85,31 @@ omni-meta/src/adapters/strip_blocking.rs     # strip_blocking<R:Read, W:Write>(r
 /// 单类被删元数据的归类，用于 StripReport 统计。
 pub enum RemovedKind { Exif, Xmp, Iptc, Icc, Other }
 
-pub enum StripCmd<'a> {
+pub enum StripCmd {
     /// 把输入窗口接下来的 n 字节原样拷到输出。
     Emit(usize),
     /// 丢弃输入窗口接下来的 n 字节（被剥离的元数据），计入报告。
     Drop { len: usize, kind: RemovedKind },
     /// 消费输入窗口接下来的 consume 字节，改写为 `with` 写入输出
     /// （WebP RIFF filesize 回填；keep_orientation 合成段的注入也走此/Insert）。
-    Replace { consume: usize, with: &'a [u8] },
+    Replace { consume: usize, with: Vec<u8> },
     /// 不消费任何输入，向输出注入 `bytes`（合成的最小 EXIF 段）。
-    Insert(&'a [u8]),
+    Insert(Vec<u8>),
 }
 
 /// 一次 pull 的结果：下一步需求 + 本步消耗输入字节 + 指令序列。
-pub struct StripResult<'a> {
+pub struct StripResult {
     pub demand: StripDemand, // Need(usize) / Done
     pub consumed: usize,
-    pub cmds: Vec<StripCmd<'a>>,
+    pub cmds: Vec<StripCmd>,
 }
 
 pub trait StripPlanner {
-    fn pull<'a>(&'a mut self, input: &'a [u8]) -> StripResult<'a>;
+    fn pull(&mut self, input: &[u8]) -> StripResult;
 }
 ```
 
-注：`Replace`/`Insert` 的 `with`/`bytes` 是 planner 合成出来的字节（最小 EXIF / 改写后的 filesize·VP8X flags）。设计上让其借用 planner 缓冲；**若 `&'a mut self` 与 `input: &'a [u8]` 同生命周期在实现中过于受限，改用内联小缓冲（合成段 ≤ ~64 字节，`ArrayVec`/固定数组）让 `StripCmd` 持有拥有式短字节**，由实现阶段二选一，不影响 trait 语义。`consumed` 之和 = `Emit + Drop + Replace.consume` 覆盖的输入字节；`Insert` 不计 `consumed`。
+注：`Replace`/`Insert` 持**拥有式** `Vec<u8>`（合成段 ≤ ~64 字节，分配可忽略），避免 `&mut self` 与 `input` 同生命周期的自借用约束——故 trait 无生命周期参数。`consumed` 之和 = `Emit + Drop + Replace.consume` 覆盖的输入字节；`Insert` 不计 `consumed`。
 
 **接缝**：未来 BMFF strip planner 产出同样的 `StripCmd` 流、消费 `containers/isobmff.rs`，无需改动本 trait 或图片格式 walker。
 
@@ -213,8 +213,9 @@ loop:
 全缓冲，直接调 `drive_strip_slice`，返回 `(Vec<u8>, StripReport)`。
 
 ### `strip_blocking`（omni-meta, std）
-- JPEG/PNG：真·流式——`StripStreamDriver`（仿 `StreamDriver` 增长缓冲），`Emit/Replace/Insert` 直写 `W`，常量级内存（受 `max_retained_bytes` 约束）。
-- WebP：因 filesize 回填需整 RIFF 入窗，blocking 下把输入读入有界缓冲（≤ `max_payload_bytes`）后走 slice 路径再写出。此不对称通过同一 `Need` 机制自然达成，非特例代码分支。
+**v1 实现**：把输入读入有界缓冲（累计 ≤ `Limits.max_payload_bytes`，超限 → `Error::Io`），再走 `strip_slice` 引擎，最后整块写出 `W`。
+- 理由：sans-io 核心（`StripPlanner`）保持纯状态机；blocking 缓冲是适配器实现选择。让 planner 只需处理「整缓冲」一种模式，bug 面最小；WebP filesize 回填天然成立；slice↔blocking 输出**字节级一致**变为平凡真值（两者同走 slice 引擎）。
+- **非目标（v1）**：真·窗口流式（常量内存）——需 planner 同时支持增量窗口模式，复杂度与 bug 面显著上升，留待后续优化（届时各 planner 增量化即可，trait 不变）。
 
 ### StripReport
 ```rust
