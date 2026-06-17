@@ -105,6 +105,9 @@ pub enum StripCmd {
     Replace { consume: usize, with: Vec<u8> },
     /// 不消费输入，注入 `with`（合成段）。
     Insert(Vec<u8>),
+    /// 纯记账：把 len 字节计入报告的 removed/bytes_removed，不消费输入、不产输出。
+    /// 供整体重建型 walker（WebP）使用。
+    Account { len: u64, kind: RemovedKind },
 }
 
 /// 一次 pull 的结果。`consumed` = 本步覆盖的输入字节（Emit+Drop+Replace.consume 之和）。
@@ -158,6 +161,10 @@ pub(crate) fn drive_strip_slice(
                 }
                 StripCmd::Insert(with) => {
                     out.extend_from_slice(&with);
+                }
+                StripCmd::Account { len, kind } => {
+                    report.bytes_removed += len;
+                    report.removed.insert(kind);
                 }
             }
         }
