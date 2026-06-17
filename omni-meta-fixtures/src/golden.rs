@@ -135,7 +135,95 @@ fn webp_exif() -> GoldenSample {
     }
 }
 
-/// 全部黄金样本。视频样本在后续任务追加。
+fn mp4() -> GoldenSample {
+    GoldenSample {
+        name: "mp4",
+        bytes: include_bytes!("../samples/mp4.mp4"),
+        format: FileFormat::Mp4,
+        unified: Unified {
+            width: Some(64),
+            height: Some(48),
+            duration_ms: Some(2000),
+            created: Some(DateTimeParts {
+                year: 2020,
+                month: 1,
+                day: 2,
+                hour: 3,
+                minute: 4,
+                second: 5,
+                tz_offset_min: Some(0),
+            }),
+            ..Default::default()
+        },
+        raw_subset: vec![],
+    }
+}
+
+fn mov() -> GoldenSample {
+    GoldenSample {
+        name: "mov",
+        bytes: include_bytes!("../samples/mov.mov"),
+        format: FileFormat::Mov,
+        unified: Unified {
+            width: Some(64),
+            height: Some(48),
+            duration_ms: Some(2000),
+            created: Some(DateTimeParts {
+                year: 2020,
+                month: 1,
+                day: 2,
+                hour: 3,
+                minute: 4,
+                second: 5,
+                tz_offset_min: Some(0),
+            }),
+            ..Default::default()
+        },
+        raw_subset: vec![],
+    }
+}
+
+fn mkv() -> GoldenSample {
+    GoldenSample {
+        name: "mkv",
+        bytes: include_bytes!("../samples/mkv.mkv"),
+        format: FileFormat::Mkv,
+        // created 不 pin：exiftool 未经标准标签报出 → 不约束（subset 语义）。
+        unified: Unified {
+            width: Some(64),
+            height: Some(48),
+            duration_ms: Some(2000),
+            ..Default::default()
+        },
+        raw_subset: vec![],
+    }
+}
+
+fn webm() -> GoldenSample {
+    GoldenSample {
+        name: "webm",
+        bytes: include_bytes!("../samples/webm.webm"),
+        format: FileFormat::Webm,
+        unified: Unified {
+            width: Some(64),
+            height: Some(48),
+            duration_ms: Some(2000),
+            ..Default::default()
+        },
+        raw_subset: vec![],
+    }
+}
+
+/// 全部黄金样本。
 pub fn golden_corpus() -> Vec<GoldenSample> {
-    vec![jpeg_exif_gps(), png_exif(), gif_xmp(), webp_exif()]
+    vec![
+        jpeg_exif_gps(),
+        png_exif(),
+        gif_xmp(),
+        webp_exif(),
+        mp4(),
+        mov(),
+        mkv(),
+        webm(),
+    ]
 }
