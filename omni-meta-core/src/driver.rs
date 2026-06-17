@@ -207,7 +207,7 @@ impl StreamDriver {
         loop {
             if budget == 0 {
                 self.collector.warnings.push(Warning {
-                    offset: self.pos_base + self.cursor as u64,
+                    offset: self.pos_base.saturating_add(self.cursor as u64),
                     kind: WarnKind::UnreachableSection,
                 });
                 self.done = true;
@@ -227,7 +227,10 @@ impl StreamDriver {
                         // 跳越文件尾：声明的数据短于结构 = 截断（与 drive_slice 前向越界对齐）。
                         // UnreachableSection 仅保留给「后向 seek 到已弃字节」这一真正不可达的情形。
                         self.collector.warnings.push(Warning {
-                            offset: self.pos_base + self.cursor as u64 + self.skip_remaining,
+                            offset: self
+                                .pos_base
+                                .saturating_add(self.cursor as u64)
+                                .saturating_add(self.skip_remaining),
                             kind: WarnKind::Truncated,
                         });
                         self.done = true;
@@ -240,7 +243,7 @@ impl StreamDriver {
             // DoS 上界：等待巨型段体导致缓冲超限。
             if self.buf.len() - self.cursor > self.max_retained {
                 self.collector.warnings.push(Warning {
-                    offset: self.pos_base + self.cursor as u64,
+                    offset: self.pos_base.saturating_add(self.cursor as u64),
                     kind: WarnKind::UnreachableSection,
                 });
                 self.done = true;
@@ -279,7 +282,7 @@ impl StreamDriver {
                         if consumed == 0 {
                             // 零前进且已有足够字节 → 解析器违约，防卡死收尾。
                             self.collector.warnings.push(Warning {
-                                offset: self.pos_base + self.cursor as u64,
+                                offset: self.pos_base.saturating_add(self.cursor as u64),
                                 kind: WarnKind::Truncated,
                             });
                             self.done = true;
@@ -289,7 +292,7 @@ impl StreamDriver {
                     }
                     if self.eof {
                         self.collector.warnings.push(Warning {
-                            offset: self.pos_base + self.cursor as u64,
+                            offset: self.pos_base.saturating_add(self.cursor as u64),
                             kind: WarnKind::Truncated,
                         });
                         self.done = true;
@@ -304,7 +307,7 @@ impl StreamDriver {
                     if k == 0 && consumed == 0 {
                         // 零前进 Skip(0) → 防卡死。
                         self.collector.warnings.push(Warning {
-                            offset: self.pos_base + self.cursor as u64,
+                            offset: self.pos_base.saturating_add(self.cursor as u64),
                             kind: WarnKind::Truncated,
                         });
                         self.done = true;
@@ -314,7 +317,7 @@ impl StreamDriver {
                 }
                 Demand::SeekTo(p) => {
                     self.cursor += consumed;
-                    let abs = self.pos_base + self.cursor as u64;
+                    let abs = self.pos_base.saturating_add(self.cursor as u64);
                     if p >= abs {
                         self.skip_remaining = p - abs;
                         self.drop_consumed();
@@ -590,6 +593,22 @@ mod tests {
         let col = drive_slice(&buf, &mut p, Limits::default());
         assert_eq!(col.warnings.len(), 1);
         assert_eq!(col.warnings[0].kind, WarnKind::Truncated);
+    }
+
+    #[test]
+    fn stream_huge_skip_offset_does_not_overflow() {
+        // pos_base 推进后再遇近 u64::MAX 的 Skip：越尾 offset 计算须 saturating，绝不 panic。
+        let mut d = StreamDriver::new(
+            alloc::boxed::Box::new(Script {
+                steps: vec![Demand::Skip(100), Demand::Skip(u64::MAX)],
+                i: 0,
+            }),
+            Limits::default(),
+        );
+        let _ = d.feed(&[0u8; 200]);
+        let _ = d.feed(&[]);
+        let col = d.finish(); // 不得 panic
+        assert!(!col.warnings.is_empty());
     }
 
     #[test]
