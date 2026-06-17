@@ -13,7 +13,7 @@ std = ["omni-meta-core/std"]
 __fuzzing = ["omni-meta-core/__fuzzing"]
 
 [dependencies]
-omni-meta-core = { path = "../omni-meta-core" }
+omni-meta-core = { path = "../omni-meta-core", default-features = false }
 
 [dev-dependencies]
 omni-meta-fixtures = { path = "../omni-meta-fixtures" }

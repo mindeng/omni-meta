@@ -1,5 +1,6 @@
 //! omni-meta：batteries-included facade。
 //! 重导出 omni-meta-core 的全部公开面，并在 std 下提供 I/O 适配器。
+#![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 
 pub use omni_meta_core::*;
