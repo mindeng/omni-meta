@@ -2,10 +2,11 @@
 //! IHDR 发 Width/Height；eXIf 发 Exif 载荷；iTXt(XML:com.adobe.xmp，未压缩)发 Xmp 载荷；
 //! 压缩文本块（flag=1）告警并跳过；IEND 发 Done；其余 chunk Skip(len+crc)。
 
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::demand::{Demand, Event, MetaParser, PayloadKind, PullResult};
-use crate::model::{Field, WarnKind, Warning};
+use crate::model::{Field, TextTag, TextValue, WarnKind, Warning};
 
 const SIG: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
@@ -73,7 +74,8 @@ impl MetaParser for PngParser {
                 };
             }
 
-            let is_meta = ctype == b"IHDR" || ctype == b"eXIf" || ctype == b"iTXt";
+            let is_meta =
+                ctype == b"IHDR" || ctype == b"eXIf" || ctype == b"iTXt" || ctype == b"tEXt";
             if is_meta {
                 // 须整读 header(8)+data(len)+crc(4)
                 let need = match 8usize.checked_add(len).and_then(|v| v.checked_add(4)) {
@@ -113,6 +115,9 @@ impl MetaParser for PngParser {
                     }
                     b"iTXt" => {
                         handle_itxt(data, &mut events);
+                    }
+                    b"tEXt" => {
+                        handle_text(data, pos as u64 + 8, &mut events);
                     }
                     _ => {}
                 }
@@ -171,6 +176,53 @@ fn handle_itxt<'a>(data: &'a [u8], events: &mut Vec<Event<'a>>) {
     });
 }
 
+/// keyword 切分结果。
+enum KwSplit<'a> {
+    /// (keyword, keyword 之后的余下字节)
+    Ok(&'a [u8], &'a [u8]),
+    /// 无 \0 分隔 或 空 keyword —— 静默丢弃。
+    Malformed,
+    /// keyword > 79 字节（违反 PNG 规范）—— 调用方应发 UnrecognizedValue。
+    TooLong,
+}
+
+/// 按首个 \0 切分 keyword；强制 1..=79 字节（PNG 规范）。
+fn split_keyword(data: &[u8]) -> KwSplit<'_> {
+    let nul = match data.iter().position(|&b| b == 0) {
+        Some(p) => p,
+        None => return KwSplit::Malformed,
+    };
+    if nul == 0 {
+        return KwSplit::Malformed; // 空 keyword
+    }
+    if nul > 79 {
+        return KwSplit::TooLong;
+    }
+    KwSplit::Ok(&data[..nul], &data[nul + 1..])
+}
+
+/// Latin-1 字节逐个无损映射为 UTF-8 String（永不失败、零依赖）。
+fn latin1_to_string(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| char::from(b)).collect()
+}
+
+/// 解析 tEXt：keyword\0value，全 Latin-1。`offset` 为该 chunk 数据起点（供 warning）。
+fn handle_text<'a>(data: &'a [u8], offset: u64, events: &mut Vec<Event<'a>>) {
+    match split_keyword(data) {
+        KwSplit::Ok(kw, val) => {
+            events.push(Event::Text(TextTag {
+                keyword: latin1_to_string(kw),
+                value: TextValue::Latin1(latin1_to_string(val)),
+            }));
+        }
+        KwSplit::Malformed => {}
+        KwSplit::TooLong => events.push(Event::Warning(Warning {
+            offset,
+            kind: WarnKind::UnrecognizedValue,
+        })),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +271,56 @@ mod tests {
     fn collect(buf: &[u8]) -> crate::driver::Collector {
         let mut p = PngParser::new();
         crate::driver::drive_slice(buf, &mut p, crate::limits::Limits::default())
+    }
+
+    fn text_chunk(kw: &[u8], val: &[u8]) -> Vec<u8> {
+        let mut d = Vec::new();
+        d.extend_from_slice(kw);
+        d.push(0);
+        d.extend_from_slice(val);
+        chunk(b"tEXt", &d)
+    }
+
+    #[test]
+    fn text_chunk_parses_into_rawtext_latin1() {
+        let mut p = Vec::new();
+        p.extend_from_slice(&SIG);
+        p.extend_from_slice(&ihdr(2, 2));
+        p.extend_from_slice(&text_chunk(b"Author", b"Ada Lovelace"));
+        p.extend_from_slice(&chunk(b"IEND", &[]));
+        let col = collect(&p);
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Png);
+        assert!(meta.raw.text.iter().any(|t| t.keyword == "Author"
+            && t.value == crate::model::TextValue::Latin1("Ada Lovelace".into())));
+    }
+
+    #[test]
+    fn text_chunk_empty_keyword_or_no_nul_is_dropped_silently() {
+        for data in [&b"\0value"[..], &b"noseparator"[..]] {
+            let mut p = Vec::new();
+            p.extend_from_slice(&SIG);
+            p.extend_from_slice(&ihdr(2, 2));
+            p.extend_from_slice(&chunk(b"tEXt", data));
+            p.extend_from_slice(&chunk(b"IEND", &[]));
+            let col = collect(&p);
+            assert!(col.warnings.is_empty(), "畸形 tEXt 应静默丢弃: {data:?}");
+            let meta = crate::driver::finalize(col, crate::model::FileFormat::Png);
+            assert!(meta.raw.text.is_empty());
+        }
+    }
+
+    #[test]
+    fn text_chunk_keyword_too_long_warns_unrecognized() {
+        let long_kw = [b'K'; 80]; // >79
+        let mut p = Vec::new();
+        p.extend_from_slice(&SIG);
+        p.extend_from_slice(&ihdr(2, 2));
+        p.extend_from_slice(&text_chunk(&long_kw, b"v"));
+        p.extend_from_slice(&chunk(b"IEND", &[]));
+        let col = collect(&p);
+        assert!(col.warnings.iter().any(|w| w.kind == WarnKind::UnrecognizedValue));
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Png);
+        assert!(meta.raw.text.is_empty());
     }
 
     #[test]
