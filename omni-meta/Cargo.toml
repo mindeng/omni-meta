@@ -13,3 +13,6 @@ std = ["omni-meta-core/std"]
 
 [dependencies]
 omni-meta-core = { path = "../omni-meta-core" }
+
+[dev-dependencies]
+omni-meta-fixtures = { path = "../omni-meta-fixtures" }

@@ -7,8 +7,16 @@ name = "omni-meta"
 version = "0.1.0"
 dependencies = [
  "omni-meta-core",
+ "omni-meta-fixtures",
 ]
 
 [[package]]
 name = "omni-meta-core"
 version = "0.1.0"
+
+[[package]]
+name = "omni-meta-fixtures"
+version = "0.1.0"
+dependencies = [
+ "omni-meta",
+]
