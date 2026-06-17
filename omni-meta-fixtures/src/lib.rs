@@ -853,7 +853,11 @@ pub fn fixture_bmff_mp4_container_tags() -> Vec<u8> {
 // ---- Four-adapter consistency oracle ----
 
 /// 四适配器对同一输入的裁决。
+///
+/// `Agree` 携带完整 `Metadata`（按设计如此——这是诊断 oracle，非热点路径），
+/// 故变体尺寸差异属预期。
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Agreement {
     /// 全部 Ok 且 Metadata 逐字段相等。
     Agree(Metadata),
@@ -926,16 +930,17 @@ pub fn assert_all_equal(bytes: &[u8]) {
 
 /// 完整文件级种子：喂 differential / read_slice_bounded / probe 全链路。
 pub fn file_corpus() -> Vec<(&'static str, Vec<u8>)> {
-    let mut v = Vec::new();
-    v.push(("jpeg_plain", fixture_plain()));
-    v.push(("jpeg_sof", fixture_with_sof()));
-    v.push(("jpeg_truncated", fixture_truncated()));
-    v.push(("jpeg_gps_ifd", build_jpeg_with_gps_ifd()));
-    v.push(("png", fixture_png()));
-    v.push(("png_itxt", fixture_png_compressed_itxt()));
-    v.push(("webp", fixture_webp()));
-    v.push(("webp_vp8l", fixture_webp_vp8l()));
-    v.push(("gif", fixture_gif()));
+    let mut v = vec![
+        ("jpeg_plain", fixture_plain()),
+        ("jpeg_sof", fixture_with_sof()),
+        ("jpeg_truncated", fixture_truncated()),
+        ("jpeg_gps_ifd", build_jpeg_with_gps_ifd()),
+        ("png", fixture_png()),
+        ("png_itxt", fixture_png_compressed_itxt()),
+        ("webp", fixture_webp()),
+        ("webp_vp8l", fixture_webp_vp8l()),
+        ("gif", fixture_gif()),
+    ];
     for (n, b) in bmff_corpus() {
         v.push((n, b));
     }
