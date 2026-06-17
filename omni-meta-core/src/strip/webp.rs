@@ -61,6 +61,8 @@ impl StripPlanner for WebpStripper {
         let mut new_body: Vec<u8> = Vec::new();
         new_body.extend_from_slice(b"WEBP");
         let mut vp8x_flag_pos: Option<usize> = None; // new_body 内 VP8X data[0] 偏移
+        let mut emitted_exif = false;
+        let mut emitted_icc = false;
 
         let mut p = 12usize;
         let mut truncated_tail: Option<usize> = None;
@@ -93,10 +95,14 @@ impl StripPlanner for WebpStripper {
                     if &fourcc == b"VP8X" && size >= 1 {
                         vp8x_flag_pos = Some(new_body.len() + 8); // data[0]
                     }
+                    if &fourcc == b"ICCP" {
+                        emitted_icc = true;
+                    }
                     new_body.extend_from_slice(&input[p..chunk_end]);
                     if &fourcc == b"VP8X" {
                         if let Some(val) = synth_orientation.take() {
                             new_body.extend_from_slice(&webp_exif_chunk(&orientation_tiff(val)));
+                            emitted_exif = true;
                         }
                     }
                 }
@@ -107,17 +113,16 @@ impl StripPlanner for WebpStripper {
         // 若没有 VP8X 但仍需合成 orientation（极少见）：追加 EXIF chunk 到 body 末尾。
         if let Some(val) = synth_orientation.take() {
             new_body.extend_from_slice(&webp_exif_chunk(&orientation_tiff(val)));
+            emitted_exif = true;
         }
 
-        // 更新 VP8X flags：清 XMP；EXIF/ICC 视最终是否保留。
+        // 更新 VP8X flags：清 XMP；EXIF/ICC 视最终是否保留（精确跟踪，不扫 payload）。
         if let Some(fp) = vp8x_flag_pos {
             if fp < new_body.len() {
                 let mut flags = new_body[fp];
                 flags &= !FLAG_XMP;
-                let has_exif = new_body.windows(4).any(|w| w == b"EXIF");
-                if has_exif { flags |= FLAG_EXIF; } else { flags &= !FLAG_EXIF; }
-                let has_icc = new_body.windows(4).any(|w| w == b"ICCP");
-                if has_icc { flags |= FLAG_ICC; } else { flags &= !FLAG_ICC; }
+                if emitted_exif { flags |= FLAG_EXIF; } else { flags &= !FLAG_EXIF; }
+                if emitted_icc { flags |= FLAG_ICC; } else { flags &= !FLAG_ICC; }
                 new_body[fp] = flags;
             }
         }
@@ -243,6 +248,14 @@ mod tests {
         let buf = [0u8, 1, 2, 3];
         let (out, _r) = run(&buf, StripOptions::default());
         assert_eq!(out, buf);
+    }
+
+    #[test]
+    fn webp_default_idempotent() {
+        let input = full_webp();
+        let (first, _) = run(&input, StripOptions::default());
+        let (second, _) = run(&first, StripOptions::default());
+        assert_eq!(first, second, "default strip must be idempotent (byte-equal on second pass)");
     }
 
     #[test]

@@ -291,4 +291,32 @@ mod tests {
         let (out, _r) = run(&buf, StripOptions::default());
         assert_eq!(out, buf);
     }
+
+    #[test]
+    fn icc_kept_by_default_dropped_aggressive() {
+        // 构造 JPEG：SOI + APP2(ICC_PROFILE) + SOS + EOI。
+        let icc_body = b"ICC_PROFILE\0\x01\x01somedata";
+        let mut j = alloc::vec::Vec::new();
+        j.extend_from_slice(&[0xFF, 0xD8]); // SOI
+        j.extend_from_slice(&app_seg(0xE2, icc_body)); // APP2 ICC
+        j.extend_from_slice(&[0xFF, 0xDA]); // SOS
+        j.extend_from_slice(&4u16.to_be_bytes()); // SOS header len
+        j.extend_from_slice(&[1, 0, 0]); // SOS body
+        j.extend_from_slice(&[0xFF, 0xD9]); // EOI
+
+        // default：ICC_PROFILE 保留。
+        let (out_default, _r) = run(&j, StripOptions::default());
+        assert!(
+            out_default.windows(11).any(|w| w == b"ICC_PROFILE"),
+            "default: ICC_PROFILE bytes should be present"
+        );
+
+        // aggressive：ICC_PROFILE 被删，report 含 Icc。
+        let (out_agg, report_agg) = run(&j, StripOptions::aggressive());
+        assert!(
+            !out_agg.windows(11).any(|w| w == b"ICC_PROFILE"),
+            "aggressive: ICC_PROFILE bytes should be removed"
+        );
+        assert!(report_agg.removed.contains(RemovedKind::Icc));
+    }
 }

@@ -191,4 +191,12 @@ mod tests {
         let (out, _r) = run(&buf, StripOptions::default());
         assert_eq!(out, buf);
     }
+
+    #[test]
+    fn png_default_idempotent() {
+        let input = full_png();
+        let (first, _) = run(&input, StripOptions::default());
+        let (second, _) = run(&first, StripOptions::default());
+        assert_eq!(first, second, "default strip must be idempotent (byte-equal on second pass)");
+    }
 }
