@@ -13,11 +13,40 @@
 - 把 EXIF / XMP / IPTC-IIM（JPEG APP13/8BIM）/ ICC 等可识别元数据从图片中**删除**，产出干净文件。
 - 服务隐私剥离 / 通用图片工具场景（ROADMAP §2 默认推荐主场景之一）。
 - 验证架构的「写」维度：这是全库第一条写路径；sans-io 重写状态机复用容器读框架的边界安全经验。
-- 默认全删，可配置保留 `keep_icc` / `keep_orientation`。
+- **默认剥离隐私元数据（EXIF/XMP/IPTC），保留渲染必需数据（ICC/orientation）**；可经选项改为「全删」。
+
+### 默认策略：隐私 vs 渲染必需
+
+剥离对象分两类，**默认行为不同**：
+
+| 类别 | 内容 | 隐私? | 默认 |
+|---|---|---|---|
+| EXIF / XMP / IPTC | GPS、机型、时间、作者、序列号… | 是 | **剥离** |
+| ICC | 色彩配置 | 否 | **保留** |
+| orientation | 显示旋转 | 否 | **保留** |
+
+理由：ICC / orientation 是**渲染必需、非个人信息**数据。隐私目标靠删 EXIF/XMP/IPTC 即完全达成；默认删掉它们只会让广色域图偏色、旋转图翻车，无任何隐私收益（最小惊讶原则）。本库不重编码像素，故保留 orientation 元数据是唯一保真手段。隐私极端派可用 `StripOptions::aggressive()` 连 ICC/orientation 一起删。
+
+```rust
+pub struct StripOptions {
+    pub limits: Limits,
+    pub keep_icc: bool,          // 默认 true：保留 ICC，避免偏色
+    pub keep_orientation: bool,  // 默认 true：保留方向，避免显示翻车
+}
+impl Default for StripOptions {
+    fn default() -> Self { Self { limits: Limits::default(), keep_icc: true, keep_orientation: true } }
+}
+impl StripOptions {
+    /// 隐私极端模式：连 ICC/orientation 一并删除（可能偏色/翻车）。
+    pub fn aggressive() -> Self { Self { keep_icc: false, keep_orientation: false, ..Self::default() } }
+}
+```
+
+> **副作用（务必文档化）**：`keep_orientation` 默认保留 ⇒ 即使源 EXIF 只含 orientation + 隐私项，输出仍残留一个**单 tag 的最小 EXIF**（即「剥离后并非零 EXIF」）。`StripReport.removed` 仍标记 `Exif` 被删（原段确被删、重写为最小段）。`aggressive()` 下输出零 EXIF。
 
 ### 非目标（v1）
 - BMFF（HEIF/AVIF/MP4/MOV）、EBML（MKV/WebM）、GIF 的剥离——盒树重写 / `iloc` 偏移表重建复杂度高一个数量级，留待后续里程碑。
-- 选择性按字段剥离（仅删 GPS 等）——v1 是「全删 + 整类保留」，不做字段级。
+- 选择性按字段剥离（仅删 GPS 等）——v1 是「按类剥离/保留」，不做字段级。
 - push / seek / async 适配器——v1 只 slice + blocking。
 - 写回比源更丰富的元数据——除 `keep_orientation` 需合成最小 EXIF 外，不新增任何元数据。
 
@@ -204,7 +233,8 @@ pub struct StripReport {
 
 ## 8. 测试策略
 
-- **回环 oracle**：`strip(file)` → `read_slice(stripped)` 断言 `raw.exif`/`raw.xmp`/`raw.container` 关于隐私项为空；`width`/`height` 不变；`keep_icc` 时 ICC 段仍在；`keep_orientation` 时 `unified.orientation` 保持。
+- **回环 oracle（默认/隐私模式）**：`strip(file, default)` → `read_slice(stripped)` 断言隐私项（GPS/机型/时间/作者/XMP/IPTC）全清空；`width`/`height` 不变；**ICC 段仍在**、`unified.orientation` **保持**（默认 `keep_*=true`）。
+- **回环 oracle（aggressive 模式）**：`strip(file, StripOptions::aggressive())` → 断言**零 EXIF / 零 ICC / 零 orientation**，隐私项亦空。
 - **幂等**：`strip(strip(x)) == strip(x)`（字节级）。
 - **slice ↔ blocking 字节级一致**：两适配器对同一输入输出 byte-identical（WebP 含 filesize 回填 + VP8X flags）。
 - **结构完整**：剥离产物可被读路径重新解析、维度一致；WebP filesize/对齐自洽。
