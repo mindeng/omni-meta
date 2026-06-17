@@ -8,6 +8,9 @@ use omni_meta::{
 };
 use std::io::Cursor;
 
+mod golden;
+pub use golden::{GoldenRawTag, GoldenSample, golden_corpus};
+
 // ---- Pure byte-builder functions ----
 
 pub fn make_tiff() -> Vec<u8> {
