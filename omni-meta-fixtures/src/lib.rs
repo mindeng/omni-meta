@@ -138,6 +138,23 @@ pub fn fixture_png() -> Vec<u8> {
     p
 }
 
+/// PNG：IHDR 后跟一个声明长度远超文件剩余字节的非元数据 chunk（无数据、无 IEND）。
+/// 解析器对其发 `Skip(巨值)`，目标越过 EOF。回归：四适配器必须对「越尾跳过」给出
+/// 一致裁决（`UnreachableSection`）——seek 适配器曾因原生 seek 越尾而误报 `Truncated`。
+pub fn png_skip_past_eof() -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]); // 签名
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&4u32.to_be_bytes());
+    ihdr.extend_from_slice(&4u32.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    p.extend_from_slice(&png_chunk(b"IHDR", &ihdr));
+    // 非元数据 chunk：声明 len=5_000_000，但其后无任何字节 → Skip 越过 EOF。
+    p.extend_from_slice(&5_000_000u32.to_be_bytes());
+    p.extend_from_slice(b"junk");
+    p
+}
+
 pub fn riff_chunk(fourcc: &[u8; 4], data: &[u8]) -> Vec<u8> {
     let mut c = Vec::new();
     c.extend_from_slice(fourcc);
@@ -937,6 +954,7 @@ pub fn file_corpus() -> Vec<(&'static str, Vec<u8>)> {
         ("jpeg_gps_ifd", build_jpeg_with_gps_ifd()),
         ("png", fixture_png()),
         ("png_itxt", fixture_png_compressed_itxt()),
+        ("png_skip_past_eof", png_skip_past_eof()),
         ("webp", fixture_webp()),
         ("webp_vp8l", fixture_webp_vp8l()),
         ("gif", fixture_gif()),

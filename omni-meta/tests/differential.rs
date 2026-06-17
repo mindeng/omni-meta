@@ -41,6 +41,12 @@ fn differential_png() {
 }
 
 #[test]
+fn differential_png_skip_past_eof() {
+    // 回归：非元数据 chunk 声明长度越过 EOF，四适配器须一致（UnreachableSection）。
+    assert_all_equal(&png_skip_past_eof());
+}
+
+#[test]
 fn differential_webp() {
     assert_all_equal(&fixture_webp());
 }
