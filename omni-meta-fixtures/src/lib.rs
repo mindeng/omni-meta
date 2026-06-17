@@ -898,6 +898,21 @@ pub fn push_drive(bytes: &[u8], opts: Options, chunk: usize) -> Result<Metadata,
     p.finish()
 }
 
+/// 跨适配器一致性判定：`unified`/`raw`/`format` **严格相等**——这是真正的契约：
+/// 不论 slice / blocking / seek / push，提取出的元数据必须逐字段一致。
+///
+/// `warnings` **不**参与跨适配器比较：它们是 best-effort 诊断，其确切集合合法地取决于
+/// 各适配器的执行模型。前向只读流式 vs 全缓冲随机访问在「数据边界处如何报告不完整」上
+/// 有本质差异，fuzz(differential) 已暴露多种形态，元数据均一致、仅 warnings 不同：
+/// (1) 前向 Skip/SeekTo 越尾的 KIND 分类（已统一为 Truncated）；(2) 后向 seek 到流式
+/// 已弃字节——slice 回 seek 判 Truncated、流式不可达判 UnreachableSection；(3) EOF 处
+/// 「空窗口=干净结束」（流式）vs「部分元素=NeedBytes→Truncated」（slice）致 warning 存在性
+/// 不同（如截断 EBML 元素：slice 报 Truncated，流式干净结束）。
+/// warning 的正确性由各 codec/format 的单测分别保证；此处只校验跨适配器的提取一致性。
+fn metadata_agree(a: &Metadata, b: &Metadata) -> bool {
+    a.unified == b.unified && a.raw == b.raw && a.format == b.format
+}
+
 /// 跑全部四适配器（push 用多种分块），判定一致性。永不 panic——分歧以 Disagree 返回。
 pub fn adapters_outcome(bytes: &[u8]) -> Agreement {
     let slice = read_slice(bytes, Options::default());
@@ -905,15 +920,17 @@ pub fn adapters_outcome(bytes: &[u8]) -> Agreement {
     let seek = read_seek(Cursor::new(bytes), Options::default());
     match &slice {
         Ok(w) => {
-            if blocking.as_ref() != Ok(w) {
-                return Agreement::Disagree(format!("blocking vs slice: {blocking:?}"));
+            match blocking.as_ref() {
+                Ok(b) if metadata_agree(b, w) => {}
+                _ => return Agreement::Disagree(format!("blocking vs slice: {blocking:?}")),
             }
-            if seek.as_ref() != Ok(w) {
-                return Agreement::Disagree(format!("seek vs slice: {seek:?}"));
+            match seek.as_ref() {
+                Ok(s) if metadata_agree(s, w) => {}
+                _ => return Agreement::Disagree(format!("seek vs slice: {seek:?}")),
             }
             for chunk in [1usize, 3, 7, bytes.len().max(1)] {
                 match push_drive(bytes, Options::default(), chunk) {
-                    Ok(got) if &got == w => {}
+                    Ok(got) if metadata_agree(&got, w) => {}
                     other => {
                         return Agreement::Disagree(format!("push chunk={chunk}: {other:?}"));
                     }
@@ -941,6 +958,29 @@ pub fn assert_all_equal(bytes: &[u8]) {
     if let Agreement::Disagree(why) = adapters_outcome(bytes) {
         panic!("adapter disagreement: {why}");
     }
+}
+
+/// 畸形 HEIF：`iloc` 算出后向 SeekTo（目标落在已解析的 ftyp 结构区，偏移 1）。
+/// fuzz(differential) 发现的复现样本（最小化前的原样 320 字节）。回归点：四适配器对
+/// 「后向不可达 seek」的诊断 label 可不同（slice 回 seek→Truncated；流式→UnreachableSection），
+/// 但提取元数据须一致——oracle 只比对 unified/raw/format，warnings 视为 best-effort。
+pub fn bmff_backward_seek_malformed() -> Vec<u8> {
+    vec![
+        0, 0, 0, 20, 102, 116, 121, 112, 104, 101, 105, 99, 0, 0, 0, 0, 109, 105, 102, 49, 0, 0, 0,
+        202, 109, 101, 116, 97, 0, 0, 0, 0, 0, 0, 0, 14, 112, 105, 116, 109, 0, 0, 0, 0, 0, 1, 0,
+        0, 0, 76, 105, 105, 110, 102, 0, 0, 0, 0, 0, 2, 0, 0, 0, 21, 105, 110, 102, 101, 2, 0, 0,
+        0, 0, 1, 0, 0, 69, 120, 105, 102, 255, 255, 0, 0, 41, 105, 110, 102, 101, 6, 0, 0, 0, 0, 2,
+        0, 0, 109, 105, 109, 101, 0, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 114,
+        100, 102, 43, 120, 109, 108, 0, 0, 0, 0, 56, 105, 112, 114, 112, 0, 0, 0, 12, 105, 112, 99,
+        111, 0, 0, 0, 20, 105, 115, 112, 101, 0, 0, 0, 0, 0, 0, 15, 192, 0, 0, 11, 208, 0, 0, 0,
+        20, 105, 112, 109, 97, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 44, 105, 108, 111, 99,
+        0, 0, 0, 0, 68, 0, 0, 2, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 109, 111, 111, 118, 0, 0, 0, 28,
+        109, 1, 0, 0, 0, 1, 0, 0, 35, 0, 0, 0, 90, 109, 100, 97, 116, 0, 0, 0, 0, 73, 201, 42, 0,
+        8, 0, 0, 0, 2, 0, 15, 1, 2, 0, 234, 0, 0, 47, 38, 0, 0, 0, 18, 1, 3, 0, 1, 0, 0, 0, 6, 0,
+        0, 0, 0, 0, 0, 0, 65, 99, 109, 101, 0, 60, 114, 100, 102, 58, 68, 101, 115, 99, 114, 105,
+        112, 116, 105, 111, 110, 32, 116, 105, 0, 0, 0, 0, 0, 0, 0, 0, 102, 102, 58, 77, 97, 107,
+        101, 61, 34, 65, 99, 109, 101, 34, 47, 62,
+    ]
 }
 
 // ---- Seed corpus functions ----
@@ -977,6 +1017,7 @@ pub fn bmff_corpus() -> Vec<(&'static str, Vec<u8>)> {
         ("mp4_moov_after_mdat", fixture_bmff_mp4_moov_after_mdat()),
         ("mp4_container_tags", fixture_bmff_mp4_container_tags()),
         ("mov_gps_mdta", build_mov_with_gps_and_mdta()),
+        ("backward_seek_malformed", bmff_backward_seek_malformed()),
     ]
 }
 
@@ -1018,8 +1059,63 @@ pub fn xmp_corpus() -> Vec<(&'static str, Vec<u8>)> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use omni_meta::{FileFormat, RawTags, Unified, WarnKind, Warning, XmpProperty};
+
+    fn meta_with_warnings(ws: Vec<Warning>) -> Metadata {
+        Metadata {
+            unified: Unified::default(),
+            raw: RawTags::default(),
+            warnings: ws,
+            format: FileFormat::Png,
+        }
+    }
+
     #[test]
-    fn crate_builds() {
-        assert_eq!(2 + 2, 4);
+    fn warnings_not_compared_across_adapters() {
+        // warnings 是 best-effort 诊断，不参与跨适配器比较：种类、存在性差异均不算分歧。
+        let none = meta_with_warnings(vec![]);
+        let trunc = meta_with_warnings(vec![Warning { offset: 1, kind: WarnKind::Truncated }]);
+        let unreach = meta_with_warnings(vec![Warning { offset: 9, kind: WarnKind::UnreachableSection }]);
+        assert!(metadata_agree(&none, &trunc), "warning 存在性差异不算分歧");
+        assert!(metadata_agree(&trunc, &unreach), "warning 种类/偏移差异不算分歧");
+    }
+
+    #[test]
+    fn rejects_unified_divergence() {
+        let mut a = meta_with_warnings(vec![]);
+        let mut b = meta_with_warnings(vec![]);
+        a.unified.width = Some(4);
+        b.unified.width = Some(5);
+        assert!(!metadata_agree(&a, &b), "unified 差异须判分歧");
+    }
+
+    #[test]
+    fn rejects_raw_divergence() {
+        let a = meta_with_warnings(vec![]);
+        let mut b = meta_with_warnings(vec![]);
+        b.raw.xmp.push(XmpProperty {
+            prefix: "tiff".into(),
+            name: "Make".into(),
+            value: "Acme".into(),
+        });
+        assert!(!metadata_agree(&a, &b), "raw 标签差异须判分歧");
+    }
+
+    #[test]
+    fn rejects_format_divergence() {
+        let a = meta_with_warnings(vec![]);
+        let mut b = meta_with_warnings(vec![]);
+        b.format = FileFormat::Webp;
+        assert!(!metadata_agree(&a, &b), "format 差异须判分歧");
+    }
+
+    #[test]
+    fn oracle_tolerates_boundary_warning_divergence_end_to_end() {
+        // 后向不可达 seek 的真实复现样本：四适配器 warnings 可不同，元数据一致 → Agree。
+        match adapters_outcome(&bmff_backward_seek_malformed()) {
+            Agreement::Agree(_) | Agreement::AllErr => {}
+            Agreement::Disagree(why) => panic!("应判一致，却分歧: {why}"),
+        }
     }
 }

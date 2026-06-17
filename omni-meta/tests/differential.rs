@@ -41,6 +41,12 @@ fn differential_png() {
 }
 
 #[test]
+fn differential_bmff_backward_seek_malformed() {
+    // 回归：畸形 iloc 致后向不可达 seek。提取元数据须一致；诊断 label 差异由 oracle 容忍。
+    assert_all_equal(&bmff_backward_seek_malformed());
+}
+
+#[test]
 fn differential_png_skip_past_eof() {
     // 回归：非元数据 chunk 声明长度越过 EOF，四适配器须一致（UnreachableSection）。
     assert_all_equal(&png_skip_past_eof());
