@@ -74,8 +74,11 @@ impl MetaParser for PngParser {
                 };
             }
 
-            let is_meta =
-                ctype == b"IHDR" || ctype == b"eXIf" || ctype == b"iTXt" || ctype == b"tEXt";
+            let is_meta = ctype == b"IHDR"
+                || ctype == b"eXIf"
+                || ctype == b"iTXt"
+                || ctype == b"tEXt"
+                || ctype == b"zTXt";
             if is_meta {
                 // 须整读 header(8)+data(len)+crc(4)
                 let need = match 8usize.checked_add(len).and_then(|v| v.checked_add(4)) {
@@ -118,6 +121,9 @@ impl MetaParser for PngParser {
                     }
                     b"tEXt" => {
                         handle_text(data, pos as u64 + 8, &mut events);
+                    }
+                    b"zTXt" => {
+                        handle_ztxt(data, &mut events);
                     }
                     _ => {}
                 }
@@ -242,6 +248,24 @@ fn handle_text<'a>(data: &'a [u8], offset: u64, events: &mut Vec<Event<'a>>) {
             kind: WarnKind::UnrecognizedValue,
         })),
     }
+}
+
+/// 解析 zTXt：keyword\0 compmethod(1) <zlib 压缩字节>。
+/// 保留压缩字节为 CompressedLatin1（本库不解压），不报 warning。
+fn handle_ztxt<'a>(data: &'a [u8], events: &mut Vec<Event<'a>>) {
+    let (kw, after_kw) = match split_keyword(data) {
+        KwSplit::Ok(kw, rest) => (kw, rest),
+        // zTXt 的 keyword 同受 1..=79 约束；畸形/超长均直接丢弃（不投影、无价值）。
+        KwSplit::Malformed | KwSplit::TooLong => return,
+    };
+    if after_kw.is_empty() {
+        return; // 缺 compression method 字节
+    }
+    let zdata = &after_kw[1..]; // 跳过 compmethod
+    events.push(Event::Text(TextTag {
+        keyword: latin1_to_string(kw),
+        value: TextValue::CompressedLatin1(zdata.to_vec()),
+    }));
 }
 
 #[cfg(test)]
@@ -428,6 +452,29 @@ mod tests {
         let meta = crate::driver::finalize(collect(&p), crate::model::FileFormat::Png);
         assert!(meta.raw.text.is_empty());
         assert!(meta.raw.xmp.iter().any(|x| x.name == "Make"));
+    }
+
+    fn ztxt(keyword: &[u8], zdata: &[u8]) -> Vec<u8> {
+        let mut d = Vec::new();
+        d.extend_from_slice(keyword);
+        d.push(0); // keyword NUL
+        d.push(0); // compression method
+        d.extend_from_slice(zdata);
+        chunk(b"zTXt", &d)
+    }
+
+    #[test]
+    fn ztxt_keeps_compressed_latin1_no_warning() {
+        let mut p = Vec::new();
+        p.extend_from_slice(&SIG);
+        p.extend_from_slice(&ihdr(2, 2));
+        p.extend_from_slice(&ztxt(b"Comment", &[0x78, 0x9c, 9, 8, 7]));
+        p.extend_from_slice(&chunk(b"IEND", &[]));
+        let col = collect(&p);
+        assert!(!col.warnings.iter().any(|w| w.kind == WarnKind::CompressedChunkSkipped));
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Png);
+        assert!(meta.raw.text.iter().any(|t| t.keyword == "Comment"
+            && matches!(t.value, crate::model::TextValue::CompressedLatin1(_))));
     }
 
     #[test]
