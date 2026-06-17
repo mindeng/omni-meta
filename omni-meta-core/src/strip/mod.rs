@@ -85,9 +85,142 @@ pub struct StripReport {
     pub warnings: Vec<Warning>,
 }
 
+/// planner 下一步需求。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StripDemand {
+    /// 还需更多输入（slice 全缓冲下若无更多 = 截断，引擎终止）。
+    More,
+    /// 完成。
+    Done,
+}
+
+/// 一步指令。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StripCmd {
+    /// 把输入窗口接下来的 n 字节原样拷到输出。
+    Emit(usize),
+    /// 丢弃输入窗口接下来的 n 字节（被剥离），计入报告。
+    Drop { len: usize, kind: RemovedKind },
+    /// 消费 consume 字节、改写为 `with` 写入输出。
+    Replace { consume: usize, with: Vec<u8> },
+    /// 不消费输入，注入 `with`（合成段）。
+    Insert(Vec<u8>),
+}
+
+/// 一次 pull 的结果。`consumed` = 本步覆盖的输入字节（Emit+Drop+Replace.consume 之和）。
+pub struct StripResult {
+    pub demand: StripDemand,
+    pub consumed: usize,
+    pub cmds: Vec<StripCmd>,
+}
+
+/// 格式 strip walker 的唯一 trait——纯状态机。
+pub trait StripPlanner {
+    fn pull(&mut self, input: &[u8]) -> StripResult;
+}
+
+/// slice 引擎：把整缓冲反复喂给 planner，按指令组装输出 + 报告。
+pub(crate) fn drive_strip_slice(
+    buf: &[u8],
+    planner: &mut dyn StripPlanner,
+    format: FileFormat,
+) -> (Vec<u8>, StripReport) {
+    let mut out: Vec<u8> = Vec::new();
+    let mut report = StripReport {
+        format,
+        bytes_removed: 0,
+        removed: RemovedKinds::default(),
+        warnings: Vec::new(),
+    };
+    let mut pos = 0usize;
+    loop {
+        let window = &buf[pos.min(buf.len())..];
+        let res = planner.pull(window);
+        // 应用指令；cur 跟踪窗口内消费位置（仅消费型指令推进）。
+        let mut cur = 0usize;
+        for cmd in res.cmds {
+            match cmd {
+                StripCmd::Emit(n) => {
+                    let end = cur.saturating_add(n).min(window.len());
+                    out.extend_from_slice(&window[cur..end]);
+                    cur = end;
+                }
+                StripCmd::Drop { len, kind } => {
+                    let end = cur.saturating_add(len).min(window.len());
+                    report.bytes_removed += (end - cur) as u64;
+                    report.removed.insert(kind);
+                    cur = end;
+                }
+                StripCmd::Replace { consume, with } => {
+                    let end = cur.saturating_add(consume).min(window.len());
+                    out.extend_from_slice(&with);
+                    cur = end;
+                }
+                StripCmd::Insert(with) => {
+                    out.extend_from_slice(&with);
+                }
+            }
+        }
+        pos = pos.saturating_add(res.consumed).min(buf.len());
+        match res.demand {
+            StripDemand::Done => break,
+            StripDemand::More => {
+                // slice 全缓冲：若已到尾且 planner 仍要更多 = 截断，安全终止。
+                if pos >= buf.len() {
+                    break;
+                }
+            }
+        }
+    }
+    (out, report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 假 planner：第一拉 Emit(2)+Drop(3,Exif)+Insert([0xAA])，第二拉 Replace(2->[0xBB])，第三拉 Done。
+    struct FakePlanner {
+        step: u8,
+    }
+    impl StripPlanner for FakePlanner {
+        fn pull(&mut self, input: &[u8]) -> StripResult {
+            self.step += 1;
+            match self.step {
+                1 => StripResult {
+                    demand: StripDemand::More,
+                    consumed: 5,
+                    cmds: alloc::vec![
+                        StripCmd::Emit(2),
+                        StripCmd::Drop { len: 3, kind: RemovedKind::Exif },
+                        StripCmd::Insert(alloc::vec![0xAA]),
+                    ],
+                },
+                2 => StripResult {
+                    demand: StripDemand::More,
+                    consumed: 2,
+                    cmds: alloc::vec![StripCmd::Replace { consume: 2, with: alloc::vec![0xBB] }],
+                },
+                _ => {
+                    let _ = input;
+                    StripResult { demand: StripDemand::Done, consumed: 0, cmds: alloc::vec![] }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn engine_applies_emit_drop_insert_replace() {
+        // 输入 7 字节：前 5 给第一拉（Emit 2 + Drop 3），后 2 给第二拉（Replace）。
+        let buf = [1u8, 2, 3, 4, 5, 6, 7];
+        let mut p = FakePlanner { step: 0 };
+        let (out, report) = drive_strip_slice(&buf, &mut p, FileFormat::Jpeg);
+        // 输出：Emit[1,2] + Insert[0xAA] + Replace[0xBB] = [1,2,0xAA,0xBB]
+        assert_eq!(out, alloc::vec![1, 2, 0xAA, 0xBB]);
+        assert_eq!(report.bytes_removed, 3);
+        assert!(report.removed.contains(RemovedKind::Exif));
+        assert_eq!(report.format, FileFormat::Jpeg);
+    }
 
     #[test]
     fn options_default_is_privacy_mode() {
