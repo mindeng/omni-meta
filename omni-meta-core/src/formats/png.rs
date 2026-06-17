@@ -114,7 +114,7 @@ impl MetaParser for PngParser {
                         });
                     }
                     b"iTXt" => {
-                        handle_itxt(data, &mut events);
+                        handle_itxt(data, pos as u64 + 8, &mut events);
                     }
                     b"tEXt" => {
                         handle_text(data, pos as u64 + 8, &mut events);
@@ -136,28 +136,27 @@ impl MetaParser for PngParser {
     }
 }
 
-/// 解析 iTXt 数据；仅当 keyword 为 XMP 且未压缩时发 Xmp 载荷，压缩则告警。
-fn handle_itxt<'a>(data: &'a [u8], events: &mut Vec<Event<'a>>) {
-    // keyword\0 compflag(1) compmethod(1) lang\0 transkw\0 text
-    let kw_end = match data.iter().position(|&b| b == 0) {
-        Some(p) => p,
-        None => return,
+/// 解析 iTXt 数据。
+/// keyword==XML:com.adobe.xmp 且未压缩 → 发 Xmp 载荷（不变）。
+/// 其它 keyword：未压缩合法 UTF-8 → Text(Utf8)；非法 UTF-8 → UnrecognizedValue；
+/// 压缩 → Text(CompressedUtf8)，不报 warning。`offset` 为 chunk 数据起点。
+fn handle_itxt<'a>(data: &'a [u8], offset: u64, events: &mut Vec<Event<'a>>) {
+    // 布局：keyword\0 compflag(1) compmethod(1) lang\0 transkw\0 text
+    let (kw, after_kw) = match split_keyword(data) {
+        KwSplit::Ok(kw, rest) => (kw, rest),
+        KwSplit::Malformed => return,
+        KwSplit::TooLong => {
+            events.push(Event::Warning(Warning {
+                offset,
+                kind: WarnKind::UnrecognizedValue,
+            }));
+            return;
+        }
     };
-    if &data[..kw_end] != b"XML:com.adobe.xmp" {
-        return;
-    }
-    let after_kw = &data[kw_end + 1..];
     if after_kw.len() < 2 {
         return;
     }
     let compressed = after_kw[0] != 0;
-    if compressed {
-        events.push(Event::Warning(Warning {
-            offset: 0,
-            kind: WarnKind::CompressedChunkSkipped,
-        }));
-        return;
-    }
     // 跳过 compflag(1)+compmethod(1)，再跳过 lang\0 与 transkw\0
     let rest = &after_kw[2..];
     let lang_end = match rest.iter().position(|&b| b == 0) {
@@ -170,10 +169,32 @@ fn handle_itxt<'a>(data: &'a [u8], events: &mut Vec<Event<'a>>) {
         None => return,
     };
     let text = &rest2[tk_end + 1..];
-    events.push(Event::Payload {
-        kind: PayloadKind::Xmp,
-        data: text,
-    });
+
+    let is_xmp = kw == b"XML:com.adobe.xmp";
+    if is_xmp && !compressed {
+        events.push(Event::Payload {
+            kind: PayloadKind::Xmp,
+            data: text,
+        });
+        return;
+    }
+    if compressed {
+        events.push(Event::Text(TextTag {
+            keyword: latin1_to_string(kw),
+            value: TextValue::CompressedUtf8(text.to_vec()),
+        }));
+        return;
+    }
+    match core::str::from_utf8(text) {
+        Ok(s) => events.push(Event::Text(TextTag {
+            keyword: latin1_to_string(kw),
+            value: TextValue::Utf8(String::from(s)),
+        })),
+        Err(_) => events.push(Event::Warning(Warning {
+            offset,
+            kind: WarnKind::UnrecognizedValue,
+        })),
+    }
 }
 
 /// keyword 切分结果。
@@ -346,20 +367,67 @@ mod tests {
         );
     }
 
+    fn itxt(keyword: &[u8], compressed: bool, text: &[u8]) -> Vec<u8> {
+        let mut d = Vec::new();
+        d.extend_from_slice(keyword);
+        d.push(0); // keyword NUL
+        d.push(if compressed { 1 } else { 0 }); // compflag
+        d.push(0); // compmethod
+        d.push(0); // lang NUL
+        d.push(0); // transkw NUL
+        d.extend_from_slice(text);
+        chunk(b"iTXt", &d)
+    }
+
     #[test]
-    fn compressed_itxt_warns_and_skips() {
+    fn itxt_non_xmp_uncompressed_parses_utf8() {
         let mut p = Vec::new();
         p.extend_from_slice(&SIG);
         p.extend_from_slice(&ihdr(2, 2));
-        p.extend_from_slice(&itxt_xmp(b"ignored", true)); // compressed
+        p.extend_from_slice(&itxt(b"Description", false, "héllo".as_bytes()));
+        p.extend_from_slice(&chunk(b"IEND", &[]));
+        let meta = crate::driver::finalize(collect(&p), crate::model::FileFormat::Png);
+        assert!(meta.raw.text.iter().any(|t| t.keyword == "Description"
+            && t.value == crate::model::TextValue::Utf8("héllo".into())));
+    }
+
+    #[test]
+    fn itxt_invalid_utf8_warns_unrecognized() {
+        let mut p = Vec::new();
+        p.extend_from_slice(&SIG);
+        p.extend_from_slice(&ihdr(2, 2));
+        p.extend_from_slice(&itxt(b"Comment", false, &[0xFF, 0xFE]));
         p.extend_from_slice(&chunk(b"IEND", &[]));
         let col = collect(&p);
-        assert!(
-            col.warnings
-                .iter()
-                .any(|w| w.kind == WarnKind::CompressedChunkSkipped)
-        );
-        assert!(col.xmp.is_empty());
+        assert!(col.warnings.iter().any(|w| w.kind == WarnKind::UnrecognizedValue));
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Png);
+        assert!(meta.raw.text.is_empty());
+    }
+
+    #[test]
+    fn itxt_compressed_keeps_bytes_no_warning() {
+        let mut p = Vec::new();
+        p.extend_from_slice(&SIG);
+        p.extend_from_slice(&ihdr(2, 2));
+        p.extend_from_slice(&itxt(b"Description", true, &[0x78, 0x9c, 1, 2, 3]));
+        p.extend_from_slice(&chunk(b"IEND", &[]));
+        let col = collect(&p);
+        assert!(!col.warnings.iter().any(|w| w.kind == WarnKind::CompressedChunkSkipped));
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Png);
+        assert!(meta.raw.text.iter().any(|t| t.keyword == "Description"
+            && matches!(t.value, crate::model::TextValue::CompressedUtf8(_))));
+    }
+
+    #[test]
+    fn itxt_xmp_still_routes_to_xmp_unchanged() {
+        let mut p = Vec::new();
+        p.extend_from_slice(&SIG);
+        p.extend_from_slice(&ihdr(2, 2));
+        p.extend_from_slice(&itxt_xmp(br#"<rdf:Description tiff:Make="Acme"/>"#, false));
+        p.extend_from_slice(&chunk(b"IEND", &[]));
+        let meta = crate::driver::finalize(collect(&p), crate::model::FileFormat::Png);
+        assert!(meta.raw.text.is_empty());
+        assert!(meta.raw.xmp.iter().any(|x| x.name == "Make"));
     }
 
     #[test]
