@@ -10,3 +10,5 @@ mod adapters;
 pub use adapters::blocking::read_blocking;
 #[cfg(feature = "std")]
 pub use adapters::seek::read_seek;
+#[cfg(feature = "std")]
+pub use adapters::strip_blocking::strip_blocking;
