@@ -29,11 +29,17 @@
 
 ## 已知缺口
 
-- **① PNG 无 EXIF 锚点**：本机 exiftool 把 `-Make=` 写入 PNG 原生 `tEXt` keyword（exiftool 报告组 `[PNG]`），
-  而非 `eXIf` chunk。omni-meta 的 PNG 解析器有意只认 `IHDR`/`eXIf`/`iTXt`，故对 tEXt 中的 Make 不投影——
-  这是**正确行为**，不是缺陷。因此 PNG 样本只锚定**尺寸 + XMP `dc:creator`**；PNG 的 EXIF-via-`eXIf` 路径
-  未被真实样本覆盖（JPEG/WebP 已覆盖 EXIF codec 路径）。如需补强，需让 exiftool 真正写出 `eXIf` chunk
-  （`-Make=` 默认路由到 tEXt）。
+- **① PNG 样本无 EXIF 锚点**：本机 exiftool 把 `-Make=` 写成 PNG 原生 `tEXt` keyword（字面量 `Make`，
+  exiftool 报告组 `[PNG]`），**而非** `eXIf` chunk。需区分两件事：
+  - **不投影这个 tEXt「Make」是正确的（非 bug）**：`tEXt` 不是 EXIF，`Make` 也非 PNG 注册关键字，
+    没有标准规定「tEXt 里叫 Make 的文本 = 相机 Make」——那是 exiftool 私有约定。把它当 `camera_make`
+    即违反「绝不臆造」。EXIF 在 PNG 的标准载体是 `eXIf` chunk，omni-meta 支持之（本样本只是没走标准载体）。
+    故 `camera_make=None` 忠实，golden 的 (C) 放松成立。
+  - **但「完全不读 tEXt/zTXt」是真实的覆盖缺口（非 correctness bug）**：`tEXt` 的**注册关键字**
+    （`Author`/`Copyright`/`Software`/`Creation Time`/`Description`/`Comment`…）有明确语义、确可投影；
+    现解析器只认 `IHDR`/`eXIf`/`iTXt`（见 `../../omni-meta-core/src/formats/png.rs:76`），一概不读。
+    对**隐私剥离**亦是盲区（tEXt 可含 PII）。已列入 ROADMAP §4 待评估。
+  - 本 PNG 样本因此只锚定**尺寸 + XMP `dc:creator`**；EXIF-via-`eXIf` 路径由 JPEG/WebP 样本覆盖。
 
 - **② MKV/WebM `created` 未 pin**：exiftool 未经标准日期标签（CreateDate/MediaCreateDate/TrackCreateDate）
   报出 Matroska 的创建时间，故 `created` 留作不约束（subset 语义下 None=不校验）。`duration_ms` 与尺寸照常锚定。
