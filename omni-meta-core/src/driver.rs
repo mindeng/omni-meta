@@ -25,6 +25,7 @@ pub struct Collector {
     camera_make: Option<alloc::string::String>,
     camera_model: Option<alloc::string::String>,
     container: Vec<ContainerTag>,
+    text: Vec<crate::model::TextTag>,
     limits: Limits,
 }
 
@@ -57,6 +58,11 @@ impl Collector {
             Event::ContainerTag(t) => {
                 if self.container.len() < self.limits.max_tags {
                     self.container.push(t);
+                }
+            }
+            Event::Text(t) => {
+                if self.text.len() < self.limits.max_tags {
+                    self.text.push(t);
                 }
             }
             Event::Field(Field::Duration(ms)) => {
@@ -109,7 +115,7 @@ pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
         exif: col.exif,
         xmp: col.xmp,
         container: col.container,
-        text: alloc::vec::Vec::new(), // Task 2 替换为 col.text
+        text: col.text,
     };
     let mut warnings = col.warnings;
     let mut unified = normalize(&raw, &mut warnings);
@@ -174,6 +180,7 @@ impl StreamDriver {
                 camera_make: None,
                 camera_model: None,
                 container: Vec::new(),
+                text: Vec::new(),
                 limits,
             },
             skip_remaining: 0,
@@ -392,6 +399,7 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
         camera_make: None,
         camera_model: None,
         container: Vec::new(),
+        text: Vec::new(),
         limits,
     };
     let mut pos: usize = 0;
@@ -1211,6 +1219,7 @@ mod tests {
             camera_make: None,
             camera_model: None,
             container: Vec::new(),
+            text: Vec::new(),
             limits,
         };
         for i in 0..5u32 {
@@ -1221,6 +1230,55 @@ mod tests {
             }));
         }
         assert_eq!(col.container.len(), 2, "超过 max_tags 的标签须被丢弃");
+    }
+
+    #[test]
+    fn collector_accumulates_text_into_rawtags() {
+        use crate::demand::{Demand, Event, MetaParser, PullResult};
+        use crate::model::{TextTag, TextValue};
+
+        struct TextEmitter(bool);
+        impl MetaParser for TextEmitter {
+            fn pull<'a>(&mut self, _input: &'a [u8]) -> PullResult<'a> {
+                let events = alloc::vec![Event::Text(TextTag {
+                    keyword: alloc::string::String::from("Author"),
+                    value: TextValue::Latin1(alloc::string::String::from("Ada")),
+                })];
+                self.0 = true;
+                PullResult { demand: Demand::Done, consumed: 0, events }
+            }
+        }
+
+        let mut p = TextEmitter(false);
+        let col = crate::driver::drive_slice(&[0u8; 4], &mut p, crate::limits::Limits::default());
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Png);
+        assert_eq!(meta.raw.text.len(), 1);
+        assert_eq!(meta.raw.text[0].keyword, "Author");
+    }
+
+    #[test]
+    fn collector_caps_text_at_max_tags() {
+        use crate::demand::{Demand, Event, MetaParser, PullResult};
+        use crate::model::{TextTag, TextValue};
+
+        struct Flood;
+        impl MetaParser for Flood {
+            fn pull<'a>(&mut self, _input: &'a [u8]) -> PullResult<'a> {
+                let mut events = alloc::vec::Vec::new();
+                for _ in 0..10 {
+                    events.push(Event::Text(TextTag {
+                        keyword: alloc::string::String::from("K"),
+                        value: TextValue::Utf8(alloc::string::String::from("v")),
+                    }));
+                }
+                PullResult { demand: Demand::Done, consumed: 0, events }
+            }
+        }
+        let limits = crate::limits::Limits { max_tags: 3, ..crate::limits::Limits::default() };
+        let mut p = Flood;
+        let col = crate::driver::drive_slice(&[0u8; 4], &mut p, limits);
+        let meta = crate::driver::finalize(col, crate::model::FileFormat::Png);
+        assert_eq!(meta.raw.text.len(), 3);
     }
 
     fn make_tiff() -> Vec<u8> {

@@ -38,6 +38,8 @@ pub enum Event<'a> {
     Field(Field),
     /// 容器原生 key-value 标签（QuickTime mdta / udta），原样入 raw.container。
     ContainerTag(crate::model::ContainerTag),
+    /// PNG 文本块（tEXt/iTXt 非 XMP/zTXt）keyword→value，原样入 raw.text。
+    Text(crate::model::TextTag),
     Warning(Warning),
 }
 
