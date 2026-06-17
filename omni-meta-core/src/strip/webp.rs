@@ -90,7 +90,7 @@ impl StripPlanner for WebpStripper {
                     report_removed.push((chunk_end - p, k));
                 }
                 None => {
-                    if &fourcc == b"VP8X" {
+                    if &fourcc == b"VP8X" && size >= 1 {
                         vp8x_flag_pos = Some(new_body.len() + 8); // data[0]
                     }
                     new_body.extend_from_slice(&input[p..chunk_end]);
@@ -111,13 +111,15 @@ impl StripPlanner for WebpStripper {
 
         // 更新 VP8X flags：清 XMP；EXIF/ICC 视最终是否保留。
         if let Some(fp) = vp8x_flag_pos {
-            let mut flags = new_body[fp];
-            flags &= !FLAG_XMP;
-            let has_exif = new_body.windows(4).any(|w| w == b"EXIF");
-            if has_exif { flags |= FLAG_EXIF; } else { flags &= !FLAG_EXIF; }
-            let has_icc = new_body.windows(4).any(|w| w == b"ICCP");
-            if has_icc { flags |= FLAG_ICC; } else { flags &= !FLAG_ICC; }
-            new_body[fp] = flags;
+            if fp < new_body.len() {
+                let mut flags = new_body[fp];
+                flags &= !FLAG_XMP;
+                let has_exif = new_body.windows(4).any(|w| w == b"EXIF");
+                if has_exif { flags |= FLAG_EXIF; } else { flags &= !FLAG_EXIF; }
+                let has_icc = new_body.windows(4).any(|w| w == b"ICCP");
+                if has_icc { flags |= FLAG_ICC; } else { flags &= !FLAG_ICC; }
+                new_body[fp] = flags;
+            }
         }
 
         // 越界尾：把原始 [truncated_tail..] 追加（安全保留）。
@@ -241,5 +243,27 @@ mod tests {
         let buf = [0u8, 1, 2, 3];
         let (out, _r) = run(&buf, StripOptions::default());
         assert_eq!(out, buf);
+    }
+
+    #[test]
+    fn malformed_vp8x_zero_size_no_panic() {
+        // VP8X 声明 size=0（畸形，无 flag 字节），且仅含 EXIF chunk（被剥除）→
+        // 剥除后 fp == new_body.len()，new_body[fp] 越界 panic。绝不 panic，安全输出。
+        let mut body = alloc::vec::Vec::new();
+        body.extend_from_slice(b"WEBP");
+        body.extend_from_slice(b"VP8X");
+        body.extend_from_slice(&0u32.to_le_bytes()); // size = 0（畸形）
+        // EXIF chunk 会被剥除，剥除后 new_body 仅有 WEBP(4)+VP8X_header(8)=12 字节。
+        // fp=12 == new_body.len() → 越界。
+        body.extend_from_slice(&riff_chunk(b"EXIF", &[1u8, 2, 3, 4]));
+        let mut f = alloc::vec::Vec::new();
+        f.extend_from_slice(b"RIFF");
+        f.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        f.extend_from_slice(&body);
+        // 不得 panic；输出 RIFF 头自洽。
+        let (out, _r) = run(&f, StripOptions::default());
+        assert_eq!(&out[0..4], b"RIFF");
+        let declared = u32::from_le_bytes([out[4], out[5], out[6], out[7]]) as usize;
+        assert_eq!(declared, out.len() - 8);
     }
 }
