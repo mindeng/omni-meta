@@ -1,6 +1,6 @@
 # omni-meta Roadmap
 
-**活文档** · 最近更新 2026-06-16（A1+A2+A3+C 完成；GPS 字段投影 + 视频 mdta 来源完成）· 维护者随进度勾选
+**活文档** · 最近更新 2026-06-17（testing-hardening 完成：no_std CI 裸机真证 + exiftool 核对的黄金样本）· 维护者随进度勾选
 基准设计：[`docs/superpowers/specs/2026-06-14-omni-meta-design.md`](superpowers/specs/2026-06-14-omni-meta-design.md)
 
 > 本文档替代原设计 §11 的线性 phase 表——实际推进中适配器被提前完成、各纵切片
@@ -145,8 +145,8 @@ IPTC codec · ICC 摘要 · TIFF 顶层格式 · async/tokio 适配器 · `video
 - [ ] **Unified 受控增长**：`created`（BMFF+EXIF）/ `duration_ms`（BMFF+EBML，**C 起达 ≥2 来源**）/ `gps`（EXIF GPS IFD + XMP + 视频 ©xyz/loci/QuickTime mdta，**已投影，≥3 来源**）✅ / `video_codec` / `audio_codec` 等随来源达到 ≥2 时纳入
 - [ ] **`Value` 枚举**：按需补 `U64`/`I64` 等（当前为 v1 子集）
 - [x] **fuzz**：cargo-fuzz harness（独立 `fuzz/` workspace）——6 target（differential/read_slice_bounded/isobmff/ebml/exif/xmp）+ 计数全局分配器（不超 Limits tripwire）+ 复用 fixtures 的种子语料。见 `fuzz/README.md`、设计 `specs/2026-06-17-cargo-fuzz-design.md`、计划 `plans/2026-06-17-cargo-fuzz.md`。首轮暴露并修复 3 个缺陷（seek 越尾误判、前向越尾警告 KIND 不一致、近 u64::MAX skip 的 offset 溢出 panic）。differential oracle 口径：`unified`/`raw`/`format` 严格相等，`warnings` 为 best-effort 不跨适配器比对（slice 随机访问 vs 流式前向只读在边界报告不完整有本质差异）。
-- [ ] **no_std CI**：每个里程碑验证 `--no-default-features`
-- [ ] **黄金样本**：真实小样本 + 期望 `Metadata` 快照
+- [x] **no_std CI**：GitHub Actions 裸机 target（`thumbv7em-none-eabi`）构建 core+facade；全套门禁（fmt/clippy `-D warnings`/test/no_std/fuzz-build）。见 `.github/workflows/ci.yml`。**裸机真证当场暴露并修复 2 个真实缺陷**：facade `omni-meta` 缺 `#![no_std]` opt-out + 其 `Cargo.toml` 对 core 依赖未 `default-features = false`（host 构建因隐式有 std 而误绿，裸机才暴露）。
+- [x] **黄金样本**：真实小样本（ffmpeg 生成）+ **exiftool 独立核对**的期望（Unified 子集 + raw 标签子集，破同源偏差）。8 样本覆盖 JPEG(EXIF+GPS)/PNG/GIF/WebP/MP4/MOV/MKV/WebM；每个跑四适配器一致 + 对外部真相锚定。见 `omni-meta-fixtures/samples/`（`regen.sh` + `README.md` 缺口登记）、`omni-meta-fixtures/src/golden.rs`、`omni-meta/tests/golden.rs`。HEIC/AVIF 因本机 ffmpeg 无 HEIF 复用器未纳入（合成 fixture 兜底）。
 - [ ] **待评估：视频朝向（orientation）** — 解析 `tkhd` 变换矩阵（当前 `parse_tkhd` 跳过矩阵区、只取末 8 字节维度）→ 推导旋转 → 投影 `Unified.orientation`（图像 EXIF orientation 作第二来源，可凑 ≥2）。与 QuickTime `video-orientation` 键是同一语义的两个来源，需一并评估优先级。
 - [ ] **待评估：anchor/保留机制落地**（基准设计 §锚点/保留机制，至今未实现）。当前 `Demand` 仅 `NeedBytes/Skip/SeekTo/Done`，流式无「解析器声明回看 → 驱动从锚点起保留字节」能力，故**后向 seek 到已弃字节**在流式不可达（`UnreachableSection`）而 slice 全缓冲可达——fuzz 已证此为前向只读流式 vs 随机访问的**本质差异**（畸形 BMFF `iloc` 后向 `SeekTo`）。现状以「oracle 不跨适配器比 warnings + 提取元数据仍一致」消化，**未阻塞**。落地 anchor 的触发条件：①出现需在保留窗口内**回看提取**元数据的真实格式（设计举例 AVI `idx1`）；或②跨「可 seek vs 不可 seek」源的**严格 warning 一致**成为硬需求。届时需扩 `Demand`（anchor/release）+ StreamDriver 保留下界管理（受 `max_retained_bytes` 约束）+ 复核各 parser。
 - [ ] **待评估：容器元数据投影收敛** — 待 `Event::ContainerTag` 落地后，考虑把现走 parser 侧 `Event::Field` 发射的 mdta 专属投影（`gps`/`make`/`model`/`created`）改由 normalize 从 `RawTags.container` 统一解释，使「容器元数据→Unified」全走一条路（normalize 权威 + 跨来源定优先级）。结构头字段（`tkhd`/`mvhd`/`ispe`/IHDR/EBML 维度等）仍留在 `Field`——它们无命名空间、parser 权威。
