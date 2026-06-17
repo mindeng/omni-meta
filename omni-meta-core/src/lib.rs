@@ -18,6 +18,7 @@ pub(crate) mod model;
 pub(crate) mod normalize;
 pub(crate) mod probe;
 pub(crate) mod driver;
+pub(crate) mod strip;
 
 pub use adapters::push::PushParser;
 pub use adapters::slice::{read_slice, Options};

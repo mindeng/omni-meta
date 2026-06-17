@@ -178,6 +178,8 @@ pub enum WarnKind {
     UnrecognizedValue,
     /// 压缩块被跳过（本库零依赖、不解压）。
     CompressedChunkSkipped,
+    /// 剥离时遇歧义/损坏结构，为安全保留该区字节未删。
+    StripSkippedAmbiguous,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -6,6 +6,8 @@ pub enum Error {
     UnrecognizedFormat,
     /// I/O 源直接报错。v1 不保留底层 io::Error 细节（best-effort）。
     Io,
+    /// 已识别格式，但当前 strip 不支持（GIF/HEIF/MP4/MKV…）。
+    Unsupported,
 }
 
 impl core::fmt::Display for Error {
@@ -13,6 +15,7 @@ impl core::fmt::Display for Error {
         match self {
             Error::UnrecognizedFormat => f.write_str("unrecognized file format"),
             Error::Io => f.write_str("i/o error"),
+            Error::Unsupported => f.write_str("format not supported for this operation"),
         }
     }
 }
