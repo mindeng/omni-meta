@@ -28,8 +28,8 @@ pub use driver::Outcome;
 pub use error::Error;
 pub use limits::Limits;
 pub use model::{
-    DateTimeParts, ExifTag, FileFormat, IfdKind, Metadata, Orientation, RawTags, Unified, Value,
-    WarnKind, Warning, XmpProperty,
+    ContainerSource, ContainerTag, DateTimeParts, ExifTag, FileFormat, Gps, IfdKind, Metadata,
+    Orientation, RawTags, Unified, Value, WarnKind, Warning, XmpProperty,
 };
 
 /// 模糊专用入口（薄包装）。仅在 `__fuzzing` 特性下编译；`#[doc(hidden)]` 且
@@ -78,6 +78,13 @@ mod smoke {
     #[test]
     fn crate_builds() {
         assert_eq!(2 + 2, 4);
+    }
+
+    #[test]
+    fn gps_and_container_source_are_reexported() {
+        // 经 crate 根路径可命名 → 证明已重导出（编译期即验证）。
+        let _g: crate::Gps = crate::Gps { lat_e7: 0, lon_e7: 0, alt_mm: None };
+        let _s: crate::ContainerSource = crate::ContainerSource::QuickTimeMdta;
     }
 }
 
