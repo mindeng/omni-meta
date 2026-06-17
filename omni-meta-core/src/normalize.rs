@@ -16,6 +16,8 @@ const TAG_OFFSET_TIME: u16 = 0x9010; // 对应 0x0132
 const TAG_OFFSET_TIME_ORIGINAL: u16 = 0x9011; // 对应 0x9003
 const TAG_SOFTWARE: u16 = 0x0131;
 const TAG_ARTIST: u16 = 0x013B;
+const TAG_IMAGE_DESCRIPTION: u16 = 0x010E;
+const TAG_COPYRIGHT: u16 = 0x8298;
 
 /// 度（f64）→ E7（i32）。隔离的 f64 换算：手动 ±0.5 偏置后 `as i32` 取整（no_std 无 round()）。
 /// 非有限 / 越 i32 界 → None（不臆造）。
@@ -268,6 +270,114 @@ fn xmp_text(raw: &RawTags, prefix: &str, name: &str) -> Option<alloc::string::St
     })
 }
 
+/// 取 raw.text 中首个匹配 keyword 的**明文**值（Latin1/Utf8）；压缩变体跳过。
+fn png_text(raw: &RawTags, keyword: &str) -> Option<alloc::string::String> {
+    raw.text.iter().find_map(|t| {
+        if t.keyword != keyword {
+            return None;
+        }
+        match &t.value {
+            crate::model::TextValue::Latin1(s) | crate::model::TextValue::Utf8(s) => {
+                Some(s.clone())
+            }
+            _ => None,
+        }
+    })
+}
+
+/// 解析 PNG `Creation Time`：依次尝试 ISO 8601 / RFC 1123 / 裸日期 YYYY-MM-DD。
+/// 均不匹配 → None（不臆造、不报 warning）。
+fn parse_png_creation_time(s: &str) -> Option<DateTimeParts> {
+    if let Some(dt) = parse_iso8601(s) {
+        return Some(dt);
+    }
+    if let Some(dt) = parse_rfc1123(s) {
+        return Some(dt);
+    }
+    parse_bare_date(s)
+}
+
+/// RFC 1123：`Day, DD Mon YYYY HH:MM:SS GMT`（PNG 规范钦定）。tz 视作 UTC=Some(0)。
+fn parse_rfc1123(s: &str) -> Option<DateTimeParts> {
+    let b = s.as_bytes();
+    if b.len() != 29 || b[3] != b',' || b[4] != b' ' {
+        return None;
+    }
+    let two = |i: usize| -> Option<u32> {
+        let (h, l) = (b[i], b[i + 1]);
+        if !h.is_ascii_digit() || !l.is_ascii_digit() {
+            return None;
+        }
+        Some(u32::from((h - b'0') * 10 + (l - b'0')))
+    };
+    let four = |i: usize| -> Option<u32> {
+        let mut v = 0u32;
+        for &c in &b[i..i + 4] {
+            if !c.is_ascii_digit() {
+                return None;
+            }
+            v = v * 10 + u32::from(c - b'0');
+        }
+        Some(v)
+    };
+    let month = match &b[8..11] {
+        b"Jan" => 1, b"Feb" => 2, b"Mar" => 3, b"Apr" => 4,
+        b"May" => 5, b"Jun" => 6, b"Jul" => 7, b"Aug" => 8,
+        b"Sep" => 9, b"Oct" => 10, b"Nov" => 11, b"Dec" => 12,
+        _ => return None,
+    };
+    let day = two(5)?;
+    let year = four(12)?;
+    let hour = two(17)?;
+    let minute = two(20)?;
+    let second = two(23)?;
+    if !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 || &b[26..29] != b"GMT" {
+        return None;
+    }
+    Some(DateTimeParts {
+        year: year as u16,
+        month,
+        day: day as u8,
+        hour: hour as u8,
+        minute: minute as u8,
+        second: second as u8,
+        tz_offset_min: Some(0),
+    })
+}
+
+/// 裸日期 `YYYY-MM-DD` → 时分秒 00:00:00、tz None。
+fn parse_bare_date(s: &str) -> Option<DateTimeParts> {
+    let b = s.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let num = |r: core::ops::Range<usize>| -> Option<u32> {
+        let mut v = 0u32;
+        for &c in &b[r] {
+            if !c.is_ascii_digit() {
+                return None;
+            }
+            v = v * 10 + u32::from(c - b'0');
+        }
+        Some(v)
+    };
+    let year = num(0..4)?;
+    let month = num(5..7)?;
+    let day = num(8..10)?;
+    if year == 0 || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    Some(DateTimeParts {
+        year: year as u16,
+        month: month as u8,
+        day: day as u8,
+        hour: 0,
+        minute: 0,
+        second: 0,
+        tz_offset_min: None,
+    })
+}
+
 /// 把原始标签投影到统一模型。
 ///
 /// 遇到”存在但取值超出规范范围”的标签（如 orientation 不在 1..=8）时，
@@ -366,7 +476,7 @@ pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
             u.gps = Some(g);
         }
     }
-    // software：容器 > EXIF(0x0131) > XMP(xmp:CreatorTool)
+    // software：容器 > EXIF(0x0131) > XMP(xmp:CreatorTool) > PNG Software
     u.software = container_text(
         raw,
         ContainerSource::QuickTimeMdta,
@@ -375,8 +485,9 @@ pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
     .or_else(|| container_text(raw, ContainerSource::Udta, "©swr"))
     .map(alloc::string::String::from)
     .or_else(|| exif_primary_text(raw, TAG_SOFTWARE))
-    .or_else(|| xmp_text(raw, "xmp", "CreatorTool"));
-    // creator：容器 > EXIF(0x013B Artist) > XMP(dc:creator)
+    .or_else(|| xmp_text(raw, "xmp", "CreatorTool"))
+    .or_else(|| png_text(raw, "Software"));
+    // creator：容器 > EXIF(0x013B Artist) > XMP(dc:creator) > PNG Author
     u.creator = container_text(
         raw,
         ContainerSource::QuickTimeMdta,
@@ -385,7 +496,23 @@ pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
     .or_else(|| container_text(raw, ContainerSource::Udta, "©aut"))
     .map(alloc::string::String::from)
     .or_else(|| exif_primary_text(raw, TAG_ARTIST))
-    .or_else(|| xmp_text(raw, "dc", "creator"));
+    .or_else(|| xmp_text(raw, "dc", "creator"))
+    .or_else(|| png_text(raw, "Author"));
+    // 新字段：description / copyright / title
+    u.description = exif_primary_text(raw, TAG_IMAGE_DESCRIPTION)
+        .or_else(|| xmp_text(raw, "dc", "description"))
+        .or_else(|| png_text(raw, "Description"));
+    u.copyright = exif_primary_text(raw, TAG_COPYRIGHT)
+        .or_else(|| xmp_text(raw, "dc", "rights"))
+        .or_else(|| png_text(raw, "Copyright"));
+    u.title = xmp_text(raw, "dc", "title").or_else(|| png_text(raw, "Title"));
+    // created：normalize 内 EXIF 已优先；PNG Creation Time 末位兜底（容器在 finalize 再覆盖）
+    if u.created.is_none()
+        && let Some(s) = png_text(raw, "Creation Time")
+        && let Some(dt) = parse_png_creation_time(&s)
+    {
+        u.created = Some(dt);
+    }
     u
 }
 
@@ -1103,6 +1230,86 @@ mod tests {
             normalize(&raw_xmp, &mut warnings).software.as_deref(),
             Some("XmpSW")
         );
+    }
+
+    fn raw_with_text(keyword: &str, value: &str) -> RawTags {
+        RawTags {
+            text: alloc::vec![crate::model::TextTag {
+                keyword: keyword.into(),
+                value: crate::model::TextValue::Latin1(value.into()),
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn png_author_projects_creator_as_fallback() {
+        let mut w = Vec::new();
+        let u = normalize(&raw_with_text("Author", "Ada"), &mut w);
+        assert_eq!(u.creator.as_deref(), Some("Ada"));
+    }
+
+    #[test]
+    fn png_software_projects_software_as_fallback() {
+        let mut w = Vec::new();
+        let u = normalize(&raw_with_text("Software", "OmniTool"), &mut w);
+        assert_eq!(u.software.as_deref(), Some("OmniTool"));
+    }
+
+    #[test]
+    fn png_new_fields_project() {
+        let mut w = Vec::new();
+        assert_eq!(normalize(&raw_with_text("Title", "T"), &mut w).title.as_deref(), Some("T"));
+        assert_eq!(normalize(&raw_with_text("Description", "D"), &mut w).description.as_deref(), Some("D"));
+        assert_eq!(normalize(&raw_with_text("Copyright", "C"), &mut w).copyright.as_deref(), Some("C"));
+    }
+
+    #[test]
+    fn png_creator_does_not_override_xmp() {
+        let raw = RawTags {
+            xmp: alloc::vec![crate::model::XmpProperty {
+                prefix: "dc".into(), name: "creator".into(), value: "FromXmp".into(),
+            }],
+            text: alloc::vec![crate::model::TextTag { keyword: "Author".into(), value: crate::model::TextValue::Latin1("FromPng".into()) }],
+            ..Default::default()
+        };
+        let mut w = Vec::new();
+        assert_eq!(normalize(&raw, &mut w).creator.as_deref(), Some("FromXmp"));
+    }
+
+    #[test]
+    fn png_creation_time_iso_rfc1123_baredate() {
+        for (input, y, mo, d, h) in [
+            ("2021-07-06T09:30:00Z", 2021u16, 7u8, 6u8, 9u8),
+            ("Tue, 06 Jul 2021 09:30:00 GMT", 2021, 7, 6, 9),
+            ("2021-07-06", 2021, 7, 6, 0),
+        ] {
+            let mut w = Vec::new();
+            let u = normalize(&raw_with_text("Creation Time", input), &mut w);
+            let c = u.created.unwrap_or_else(|| panic!("未解析: {input}"));
+            assert_eq!((c.year, c.month, c.day, c.hour), (y, mo, d, h), "{input}");
+        }
+    }
+
+    #[test]
+    fn png_creation_time_unparseable_stays_raw_no_warning() {
+        let mut w = Vec::new();
+        let u = normalize(&raw_with_text("Creation Time", "sometime last summer"), &mut w);
+        assert!(u.created.is_none());
+        assert!(w.is_empty());
+    }
+
+    #[test]
+    fn png_compressed_value_not_projected() {
+        let raw = RawTags {
+            text: alloc::vec![crate::model::TextTag {
+                keyword: "Author".into(),
+                value: crate::model::TextValue::CompressedLatin1(alloc::vec![1, 2, 3]),
+            }],
+            ..Default::default()
+        };
+        let mut w = Vec::new();
+        assert!(normalize(&raw, &mut w).creator.is_none());
     }
 
     #[test]
