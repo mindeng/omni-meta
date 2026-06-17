@@ -139,8 +139,10 @@ pub fn fixture_png() -> Vec<u8> {
 }
 
 /// PNG：IHDR 后跟一个声明长度远超文件剩余字节的非元数据 chunk（无数据、无 IEND）。
-/// 解析器对其发 `Skip(巨值)`，目标越过 EOF。回归：四适配器必须对「越尾跳过」给出
-/// 一致裁决（`UnreachableSection`）——seek 适配器曾因原生 seek 越尾而误报 `Truncated`。
+/// 解析器对其发 `Skip(巨值)`，目标越过 EOF。回归：四适配器对「前向越尾跳过」必须裁决一致。
+/// 此前各适配器在此处分歧（seek 原生越尾报 `Truncated`、slice/blocking 报 `UnreachableSection`）；
+/// 经 seek 按实长夹断 + 驱动「前向越尾统一判 `Truncated`」修复后，现四者皆为 `Truncated`
+/// （声明数据短于结构 = 截断）。注：本 oracle 已不跨适配器比 warnings，此处仅为人读记录。
 pub fn png_skip_past_eof() -> Vec<u8> {
     let mut p = Vec::new();
     p.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]); // 签名
