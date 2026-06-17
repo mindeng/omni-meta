@@ -10,6 +10,7 @@ path = "src/lib.rs"
 [features]
 default = ["std"]
 std = ["omni-meta-core/std"]
+__fuzzing = ["omni-meta-core/__fuzzing"]
 
 [dependencies]
 omni-meta-core = { path = "../omni-meta-core" }

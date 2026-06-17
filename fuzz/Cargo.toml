@@ -1,0 +1,58 @@
+[package]
+name = "omni-meta-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# 空表 → fuzz 自成 workspace 根，与主 stable/no_std workspace 隔离。
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+omni-meta = { path = "../omni-meta", features = ["std", "__fuzzing"] }
+omni-meta-fixtures = { path = "../omni-meta-fixtures" }
+
+[[bin]]
+name = "differential"
+path = "fuzz_targets/differential.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "read_slice_bounded"
+path = "fuzz_targets/read_slice_bounded.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "isobmff"
+path = "fuzz_targets/isobmff.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ebml"
+path = "fuzz_targets/ebml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "exif"
+path = "fuzz_targets/exif.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xmp"
+path = "fuzz_targets/xmp.rs"
+test = false
+doc = false
+bench = false
