@@ -193,6 +193,11 @@ fn classify(marker: u8, body: &[u8], opts: &StripOptions) -> Option<(RemovedKind
     }
 }
 
+/// 供 png/webp walker 复用：在裸 TIFF 中查 orientation。
+pub(crate) fn find_orientation_pub(tiff: &[u8]) -> Option<u16> {
+    find_orientation(tiff)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
