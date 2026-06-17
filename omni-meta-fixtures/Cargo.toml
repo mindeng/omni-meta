@@ -1,0 +1,12 @@
+[package]
+name = "omni-meta-fixtures"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "omni_meta_fixtures"
+path = "src/lib.rs"
+
+# oracle 需要四适配器入口（含 std read_blocking/read_seek）。此 crate 仅供 test/fuzz 使用。
+[dependencies]
+omni-meta = { path = "../omni-meta" }
