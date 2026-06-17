@@ -224,10 +224,11 @@ impl StreamDriver {
                 self.drop_consumed();
                 if self.skip_remaining > 0 {
                     if self.eof {
-                        // 跳越文件尾：该段不可达（与 drive_slice Skip 越界对齐）。
+                        // 跳越文件尾：声明的数据短于结构 = 截断（与 drive_slice 前向越界对齐）。
+                        // UnreachableSection 仅保留给「后向 seek 到已弃字节」这一真正不可达的情形。
                         self.collector.warnings.push(Warning {
                             offset: self.pos_base + self.cursor as u64 + self.skip_remaining,
-                            kind: WarnKind::UnreachableSection,
+                            kind: WarnKind::Truncated,
                         });
                         self.done = true;
                         return Outcome::Done;
@@ -416,7 +417,8 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
                         pos = p;
                     }
                     _ => {
-                        col.warnings.push(Warning { offset: target, kind: WarnKind::UnreachableSection });
+                        // 前向 Skip 越过缓冲尾 = 声明数据短于结构 → Truncated。
+                        col.warnings.push(Warning { offset: target, kind: WarnKind::Truncated });
                         break;
                     }
                 }
@@ -432,7 +434,8 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
                         pos = up;
                     }
                     _ => {
-                        col.warnings.push(Warning { offset: p, kind: WarnKind::UnreachableSection });
+                        // 前向 SeekTo 越过缓冲尾 = 声明数据短于结构 → Truncated。
+                        col.warnings.push(Warning { offset: p, kind: WarnKind::Truncated });
                         break;
                     }
                 }
@@ -570,12 +573,37 @@ mod tests {
     }
 
     #[test]
-    fn seek_past_end_warns_unreachable() {
+    fn seek_past_end_warns_truncated() {
+        // 前向 SeekTo 越过文件尾 = 声明的数据短于结构 → Truncated（与 StreamDriver 一致）。
         let buf = [0u8; 4];
         let mut p = Script { steps: vec![Demand::SeekTo(9999)], i: 0 };
         let col = drive_slice(&buf, &mut p, Limits::default());
         assert_eq!(col.warnings.len(), 1);
-        assert_eq!(col.warnings[0].kind, WarnKind::UnreachableSection);
+        assert_eq!(col.warnings[0].kind, WarnKind::Truncated);
+    }
+
+    #[test]
+    fn skip_past_end_warns_truncated() {
+        // 前向 Skip 越过文件尾 → Truncated。
+        let buf = [0u8; 4];
+        let mut p = Script { steps: vec![Demand::Skip(9999)], i: 0 };
+        let col = drive_slice(&buf, &mut p, Limits::default());
+        assert_eq!(col.warnings.len(), 1);
+        assert_eq!(col.warnings[0].kind, WarnKind::Truncated);
+    }
+
+    #[test]
+    fn stream_skip_past_eof_warns_truncated() {
+        // 流式：Skip 越过文件尾，在 EOF 处亦判 Truncated（与 slice 一致）。
+        let mut d = StreamDriver::new(
+            alloc::boxed::Box::new(Script { steps: vec![Demand::Skip(9999)], i: 0 }),
+            Limits::default(),
+        );
+        let _ = d.feed(&[0u8; 4]);
+        let _ = d.feed(&[]);
+        let col = d.finish();
+        assert_eq!(col.warnings.len(), 1);
+        assert_eq!(col.warnings[0].kind, WarnKind::Truncated);
     }
 
     #[test]
