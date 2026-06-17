@@ -189,16 +189,15 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovI
                         b"loci" if loci_gps.is_none() => loci_gps = parse_loci(up),
                         // ©xyz は GPS 専用；generic arm から除外（二重目も container に漏らさない）。
                         k if k[0] == 0xA9 && k != b"\xA9xyz" => {
-                            if udta_tags.len() < max_tags {
-                                if let (Some(key), Some(text)) =
+                            if udta_tags.len() < max_tags
+                                && let (Some(key), Some(text)) =
                                     (udta_key_string(k), parse_udta_text(up))
-                                {
-                                    udta_tags.push(ContainerTag {
-                                        source: ContainerSource::Udta,
-                                        key,
-                                        value: Value::Text(alloc::string::String::from(text)),
-                                    });
-                                }
+                            {
+                                udta_tags.push(ContainerTag {
+                                    source: ContainerSource::Udta,
+                                    key,
+                                    value: Value::Text(alloc::string::String::from(text)),
+                                });
                             }
                         }
                         _ => {}
@@ -1206,26 +1205,25 @@ fn parse_qt_mdta(meta_payload: &[u8], max_tags: usize) -> QtMdta {
         const DATA_INT_SIGNED: u32 = 21;
         const DATA_INT_UNSIGNED: u32 = 22;
         if type_code == DATA_UTF8 {
-            if out.tags.len() < max_tags {
-                if let Ok(s) = core::str::from_utf8(value) {
-                    out.tags.push(ContainerTag {
-                        source: ContainerSource::QuickTimeMdta,
-                        key: alloc::string::String::from(key.as_str()),
-                        value: Value::Text(alloc::string::String::from(s)),
-                    });
-                }
+            if out.tags.len() < max_tags
+                && let Ok(s) = core::str::from_utf8(value)
+            {
+                out.tags.push(ContainerTag {
+                    source: ContainerSource::QuickTimeMdta,
+                    key: alloc::string::String::from(key.as_str()),
+                    value: Value::Text(alloc::string::String::from(s)),
+                });
             }
         } else if (type_code == DATA_INT_SIGNED || type_code == DATA_INT_UNSIGNED)
             && key.ends_with("focal_length.35mm_equivalent")
             && let Some(n) = be_uint_u32(value)
+            && out.tags.len() < max_tags
         {
-            if out.tags.len() < max_tags {
-                out.tags.push(ContainerTag {
-                    source: ContainerSource::QuickTimeMdta,
-                    key: alloc::string::String::from(key.as_str()),
-                    value: Value::U32(n),
-                });
-            }
+            out.tags.push(ContainerTag {
+                source: ContainerSource::QuickTimeMdta,
+                key: alloc::string::String::from(key.as_str()),
+                value: Value::U32(n),
+            });
         }
     }
     out

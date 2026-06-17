@@ -114,11 +114,11 @@ impl StripPlanner for WebpStripper {
                         emitted_icc = true;
                     }
                     new_body.extend_from_slice(&input[p..chunk_end]);
-                    if &fourcc == b"VP8X" {
-                        if let Some(val) = synth_orientation.take() {
-                            new_body.extend_from_slice(&webp_exif_chunk(&orientation_tiff(val)));
-                            emitted_exif = true;
-                        }
+                    if &fourcc == b"VP8X"
+                        && let Some(val) = synth_orientation.take()
+                    {
+                        new_body.extend_from_slice(&webp_exif_chunk(&orientation_tiff(val)));
+                        emitted_exif = true;
                     }
                 }
             }
@@ -132,22 +132,22 @@ impl StripPlanner for WebpStripper {
         }
 
         // 更新 VP8X flags：清 XMP；EXIF/ICC 视最终是否保留（精确跟踪，不扫 payload）。
-        if let Some(fp) = vp8x_flag_pos {
-            if fp < new_body.len() {
-                let mut flags = new_body[fp];
-                flags &= !FLAG_XMP;
-                if emitted_exif {
-                    flags |= FLAG_EXIF;
-                } else {
-                    flags &= !FLAG_EXIF;
-                }
-                if emitted_icc {
-                    flags |= FLAG_ICC;
-                } else {
-                    flags &= !FLAG_ICC;
-                }
-                new_body[fp] = flags;
+        if let Some(fp) = vp8x_flag_pos
+            && fp < new_body.len()
+        {
+            let mut flags = new_body[fp];
+            flags &= !FLAG_XMP;
+            if emitted_exif {
+                flags |= FLAG_EXIF;
+            } else {
+                flags &= !FLAG_EXIF;
             }
+            if emitted_icc {
+                flags |= FLAG_ICC;
+            } else {
+                flags &= !FLAG_ICC;
+            }
+            new_body[fp] = flags;
         }
 
         // 越界尾：把原始 [truncated_tail..] 追加（安全保留）。

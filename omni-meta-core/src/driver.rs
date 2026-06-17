@@ -1194,8 +1194,10 @@ mod tests {
     #[test]
     fn collector_accumulates_container_tags_and_caps_at_max_tags() {
         use crate::model::{ContainerSource, ContainerTag, Value};
-        let mut limits = crate::limits::Limits::default();
-        limits.max_tags = 2;
+        let limits = crate::limits::Limits {
+            max_tags: 2,
+            ..crate::limits::Limits::default()
+        };
         let mut col = Collector {
             exif: Vec::new(),
             xmp: Vec::new(),

@@ -153,11 +153,13 @@ impl StripPlanner for JpegStripper {
                     let drop_kind = classify(marker, body, &self.opts);
                     match drop_kind {
                         Some((kind, is_exif)) => {
-                            if is_exif && self.opts.keep_orientation && synth_orientation.is_none()
+                            if is_exif
+                                && self.opts.keep_orientation
+                                && synth_orientation.is_none()
+                                && body.len() > 6
+                                && body.starts_with(b"Exif\0\0")
                             {
-                                if body.len() > 6 && body.starts_with(b"Exif\0\0") {
-                                    synth_orientation = find_orientation(&body[6..]);
-                                }
+                                synth_orientation = find_orientation(&body[6..]);
                             }
                             cmds.push(StripCmd::Drop { len: total, kind });
                         }
