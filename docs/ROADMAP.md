@@ -143,10 +143,11 @@ IPTC codec · ICC 摘要 · TIFF 顶层格式 · async/tokio 适配器 · Stripp
 
 - [ ] **Unified 受控增长**：`created`（BMFF+EXIF）/ `duration_ms`（BMFF+EBML，**C 起达 ≥2 来源**）/ `gps`（EXIF GPS IFD + XMP + 视频 ©xyz/loci/QuickTime mdta，**已投影，≥3 来源**）✅ / `video_codec` / `audio_codec` 等随来源达到 ≥2 时纳入
 - [ ] **`Value` 枚举**：按需补 `U64`/`I64` 等（当前为 v1 子集）
-- [ ] **fuzz**：每个新容器/codec 接 `cargo-fuzz`，断言永不 panic / 不超 `Limits` / 不死循环
+- [x] **fuzz**：cargo-fuzz harness（独立 `fuzz/` workspace）——6 target（differential/read_slice_bounded/isobmff/ebml/exif/xmp）+ 计数全局分配器（不超 Limits tripwire）+ 复用 fixtures 的种子语料。见 `fuzz/README.md`、设计 `specs/2026-06-17-cargo-fuzz-design.md`、计划 `plans/2026-06-17-cargo-fuzz.md`。首轮暴露并修复 3 个缺陷（seek 越尾误判、前向越尾警告 KIND 不一致、近 u64::MAX skip 的 offset 溢出 panic）。differential oracle 口径：`unified`/`raw`/`format` 严格相等，`warnings` 为 best-effort 不跨适配器比对（slice 随机访问 vs 流式前向只读在边界报告不完整有本质差异）。
 - [ ] **no_std CI**：每个里程碑验证 `--no-default-features`
 - [ ] **黄金样本**：真实小样本 + 期望 `Metadata` 快照
 - [ ] **待评估：视频朝向（orientation）** — 解析 `tkhd` 变换矩阵（当前 `parse_tkhd` 跳过矩阵区、只取末 8 字节维度）→ 推导旋转 → 投影 `Unified.orientation`（图像 EXIF orientation 作第二来源，可凑 ≥2）。与 QuickTime `video-orientation` 键是同一语义的两个来源，需一并评估优先级。
+- [ ] **待评估：anchor/保留机制落地**（基准设计 §锚点/保留机制，至今未实现）。当前 `Demand` 仅 `NeedBytes/Skip/SeekTo/Done`，流式无「解析器声明回看 → 驱动从锚点起保留字节」能力，故**后向 seek 到已弃字节**在流式不可达（`UnreachableSection`）而 slice 全缓冲可达——fuzz 已证此为前向只读流式 vs 随机访问的**本质差异**（畸形 BMFF `iloc` 后向 `SeekTo`）。现状以「oracle 不跨适配器比 warnings + 提取元数据仍一致」消化，**未阻塞**。落地 anchor 的触发条件：①出现需在保留窗口内**回看提取**元数据的真实格式（设计举例 AVI `idx1`）；或②跨「可 seek vs 不可 seek」源的**严格 warning 一致**成为硬需求。届时需扩 `Demand`（anchor/release）+ StreamDriver 保留下界管理（受 `max_retained_bytes` 约束）+ 复核各 parser。
 - [ ] **待评估：容器元数据投影收敛** — 待 `Event::ContainerTag` 落地后，考虑把现走 parser 侧 `Event::Field` 发射的 mdta 专属投影（`gps`/`make`/`model`/`created`）改由 normalize 从 `RawTags.container` 统一解释，使「容器元数据→Unified」全走一条路（normalize 权威 + 跨来源定优先级）。结构头字段（`tkhd`/`mvhd`/`ispe`/IHDR/EBML 维度等）仍留在 `Field`——它们无命名空间、parser 权威。
 
 ---
