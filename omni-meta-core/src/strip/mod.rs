@@ -1,10 +1,6 @@
 //! 元数据剥离（写路径）。sans-io 核心：planner 只发 StripCmd，引擎组装输出。
 //! 默认隐私模式（剥离 EXIF/XMP/IPTC，保留 ICC/orientation）；aggressive 全删。
 
-// 本模块的类型在后续 strip 任务（引擎/各格式 walker/适配器）中逐步被消费；
-// 在构建过程中暂允许 dead_code，待 T11 全部接入后移除本属性。
-#![allow(dead_code)]
-
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
@@ -91,6 +87,8 @@ pub struct StripReport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StripDemand {
     /// 还需更多输入（slice 全缓冲下若无更多 = 截断，引擎终止）。
+    /// 当前所有 walker 全缓冲一次性完成；此变体保留用于流式扩展，引擎已处理。
+    #[allow(dead_code)]
     More,
     /// 完成。
     Done,
