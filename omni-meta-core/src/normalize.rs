@@ -551,7 +551,14 @@ pub fn normalize(
     u.width = structural.width.or(u.width);
     u.height = structural.height.or(u.height);
     u.duration_ms = structural.duration_ms.or(u.duration_ms);
-    u.created = structural.created.or(u.created);
+    // created 阶梯：容器 mdta creationdate（带真实时区）> 结构(mvhd/EBML) > EXIF > PNG。
+    let container_created = container_text(
+        raw,
+        ContainerSource::QuickTimeMdta,
+        "com.apple.quicktime.creationdate",
+    )
+    .and_then(parse_iso8601);
+    u.created = container_created.or(structural.created).or(u.created);
     u.gps = structural.gps.or(u.gps);
     u
 }
@@ -1517,5 +1524,33 @@ mod tests {
         let mut w = Vec::new();
         let u = normalize(&raw, &structural, &mut w);
         assert_eq!(u.created.map(|d| d.year), Some(2018));
+    }
+
+    #[test]
+    fn container_creationdate_outranks_structural_created() {
+        use crate::model::{ContainerSource, ContainerTag, DateTimeParts, Value};
+        let mut raw = RawTags::default();
+        raw.container.push(ContainerTag {
+            source: ContainerSource::QuickTimeMdta,
+            key: alloc::string::String::from("com.apple.quicktime.creationdate"),
+            value: Value::Text(alloc::string::String::from("2018-05-06T12:00:00+09:00")),
+        });
+        // 结构候选(mvhd)= 2001,容器 creationdate(2018)应胜出
+        let structural = StructuralFields {
+            created: Some(DateTimeParts {
+                year: 2001,
+                month: 1,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                tz_offset_min: Some(0),
+            }),
+            ..StructuralFields::default()
+        };
+        let mut w = Vec::new();
+        let u = normalize(&raw, &structural, &mut w);
+        assert_eq!(u.created.map(|d| d.year), Some(2018));
+        assert_eq!(u.created.and_then(|d| d.tz_offset_min), Some(540)); // +09:00
     }
 }

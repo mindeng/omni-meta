@@ -149,7 +149,6 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovI
     let mut loci_gps: Option<Gps> = None;
     let mut mdta = QtMdta {
         gps: None,
-        created: None,
         tags: alloc::vec::Vec::new(),
     };
     let mut udta_tags: Vec<ContainerTag> = Vec::new();
@@ -204,9 +203,6 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovI
                 if mdta.gps.is_none() {
                     mdta.gps = m.gps;
                 }
-                if mdta.created.is_none() {
-                    mdta.created = m.created;
-                }
                 mdta.tags.extend(m.tags);
             }
             _ => {}
@@ -214,8 +210,7 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovI
     }
     // GPS 优先级：©xyz > mdta > loci。
     info.gps = xyz_gps.or(mdta.gps).or(loci_gps);
-    // created：mdta creationdate 优先于 mvhd（mdta 带真实时区）。
-    info.created = mdta.created.or(info.created);
+    // created：仅保留 mvhd 结构值；mdta creationdate 由 normalize 从 container_tags 读取并排首位。
     // 各来源已独立封顶：mdta 用递减预算（峰值 ≤ max_tags），udta 逐条守卫（≤ max_tags）；
     // 峰值 ≤ 2×max_tags（与 meta 盒数无关）；合并后再裁到 max_tags，使合并总量精确有界。
     info.container_tags = mdta.tags;
@@ -1097,7 +1092,6 @@ fn parse_iso6709(s: &str) -> Option<Gps> {
 /// QuickTime mdta 抽取产物。
 struct QtMdta {
     gps: Option<Gps>,
-    created: Option<DateTimeParts>,
     tags: alloc::vec::Vec<ContainerTag>,
 }
 
@@ -1109,7 +1103,6 @@ struct QtMdta {
 fn parse_qt_mdta(meta_payload: &[u8], max_tags: usize) -> QtMdta {
     let mut out = QtMdta {
         gps: None,
-        created: None,
         tags: alloc::vec::Vec::new(),
     };
     let mut keys: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
@@ -1149,13 +1142,6 @@ fn parse_qt_mdta(meta_payload: &[u8], max_tags: usize) -> QtMdta {
                     && let Ok(s) = core::str::from_utf8(value)
                 {
                     out.gps = parse_iso6709(s);
-                }
-            }
-            "com.apple.quicktime.creationdate" => {
-                if out.created.is_none()
-                    && let Ok(s) = core::str::from_utf8(value)
-                {
-                    out.created = crate::normalize::parse_iso8601(s);
                 }
             }
             _ => {}
@@ -2100,8 +2086,12 @@ mod tests {
                 && matches!(&t.value, crate::model::Value::Text(s) if s == "iPhone 15")),
             "model 须在 tags 中"
         );
-        assert_eq!(out.created.map(|d| d.year), Some(2017));
-        assert_eq!(out.created.and_then(|d| d.tz_offset_min), Some(600));
+        // creationdate 不再由 QtMdta 语义解析；仍经 tags(type=1 UTF-8)进入 container → normalize 读取。
+        assert!(
+            out.tags.iter().any(|t| t.key == "com.apple.quicktime.creationdate"
+                && matches!(&t.value, crate::model::Value::Text(s) if s == "2017-07-22T16:06:06+10:00")),
+            "creationdate 须在 tags 中供 normalize 读取"
+        );
     }
 
     #[test]
@@ -2112,7 +2102,7 @@ mod tests {
         hdlr.extend_from_slice(&[0u8; 12]);
         let meta = box_bytes(b"hdlr", &hdlr);
         let out = parse_qt_mdta(&meta, usize::MAX);
-        assert!(out.gps.is_none() && out.tags.is_empty() && out.created.is_none());
+        assert!(out.gps.is_none() && out.tags.is_empty());
     }
 
     #[test]
@@ -2143,7 +2133,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_moov_mdta_creationdate_beats_mvhd() {
+    fn parse_moov_mdta_creationdate_captured_in_container_tags() {
+        // 新契约：parser 不再语义解析 mdta creationdate（info.created 仅来自 mvhd）；
+        // creationdate 作为 UTF-8 文本留在 container_tags，由 normalize 读取并排首位。
         let meta = qt_meta_with_keys(&[
             ("com.apple.quicktime.creationdate", b"2017-07-22T16:06:06Z"),
             ("com.apple.quicktime.make", b"Apple"),
@@ -2152,7 +2144,16 @@ mod tests {
         moov_p.extend_from_slice(&box_bytes(b"mvhd", &mvhd_v0(2_082_844_800, 600, 600)));
         moov_p.extend_from_slice(&box_bytes(b"meta", &meta));
         let info = parse_moov(&moov_p, 0, usize::MAX);
-        assert_eq!(info.created.map(|d| d.year), Some(2017));
+        // info.created 现在是 mvhd 值（1970），mdta 不再直接影响 parser 层 created。
+        assert_eq!(info.created.map(|d| d.year), Some(1970));
+        // mdta creationdate 须存在于 container_tags，供 normalize 读取后排在 mvhd 之上。
+        assert!(
+            info.container_tags
+                .iter()
+                .any(|t| t.key == "com.apple.quicktime.creationdate"
+                    && matches!(&t.value, crate::model::Value::Text(s) if s == "2017-07-22T16:06:06Z")),
+            "creationdate 须保留在 container_tags 供 normalize 读取"
+        );
         // make/model 不再是 MoovInfo 的直接字段，而是经 container_tags → normalize 投影
         assert!(
             info.container_tags
