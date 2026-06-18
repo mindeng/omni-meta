@@ -132,8 +132,13 @@ struct MoovInfo {
     container_tags: Vec<ContainerTag>,
 }
 
-/// 解析 `moov` 载荷：mvhd → 时长/创建时间；逐 trak → tkhd 取首个非零维度。
-/// 亦下钻 udta（©xyz/loci）与 meta（QuickTime mdta）取 GPS/make/model/creationdate。
+/// 解析 `moov` 载荷：mvhd → 时长/创建时间；逐 trak → tkhd 取首个非零维度；
+/// 下钻 udta（©xyz/loci）与 meta（QuickTime mdta）收 GPS 及原始容器标签。
+/// make/model/created 已迁 normalize 从 `RawTags.container` 统一解释。
+///
+/// GPS 例外：其优先级阶梯交错二进制源与文本源（©xyz > mdta-ISO6709 > loci），
+/// 故 GPS 整体在此解析为单一 `Field::Gps`；make/model/created 已迁 normalize 统一解释。
+///
 /// `moov_abs_base` 仅用于警告偏移保真。深度 2 显式迭代，非递归。
 /// `max_tags`：各来源 container_tags 单独封顶；峰值 ≤ 2×max_tags，Collector 再裁到 max_tags。
 fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovInfo {
@@ -1136,15 +1141,11 @@ fn parse_qt_mdta(meta_payload: &[u8], max_tags: usize) -> QtMdta {
         let Some((type_code, value)) = qt_data_typed(item_payload) else {
             continue;
         };
-        match key.as_str() {
-            "com.apple.quicktime.location.ISO6709" => {
-                if out.gps.is_none()
-                    && let Ok(s) = core::str::from_utf8(value)
-                {
-                    out.gps = parse_iso6709(s);
-                }
-            }
-            _ => {}
+        if key.as_str() == "com.apple.quicktime.location.ISO6709"
+            && out.gps.is_none()
+            && let Ok(s) = core::str::from_utf8(value)
+        {
+            out.gps = parse_iso6709(s);
         }
         // raw 层：UTF-8 文本键（type==1）原样入 container；focal length 整数（type 21/22）→ U32。
         // 源头按 max_tags 封顶，防 DoS 放大。

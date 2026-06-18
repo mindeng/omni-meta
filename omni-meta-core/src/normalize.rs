@@ -1,4 +1,9 @@
 //! 把原始标签投影成统一规范字段。映射规则集中在此，便于测试。
+//!
+//! normalize 是每个 Unified 字段跨源优先级的唯一权威。来源分两类：
+//! 文本/命名空间来源（RawTags.container / exif / xmp / png 文本）在此直接读取；
+//! 二进制结构来源（容器结构头、二进制 udta）经 `StructuralFields` 由 driver 传入。
+//! 例外：GPS 因阶梯交错二进制源，整体在 parser 解析后作为 StructuralFields.gps 传入。
 
 use alloc::vec::Vec;
 
@@ -414,15 +419,14 @@ pub fn normalize(
         if t.ifd != IfdKind::Primary {
             continue;
         }
-        match (t.tag, &t.value) {
-            (TAG_ORIENTATION, Value::U16(v)) => match Orientation::from_u16(*v) {
+        if let (TAG_ORIENTATION, Value::U16(v)) = (t.tag, &t.value) {
+            match Orientation::from_u16(*v) {
                 Some(o) => u.orientation = Some(o),
                 None => warnings.push(Warning {
                     offset: 0,
                     kind: WarnKind::UnrecognizedValue,
                 }),
-            },
-            _ => {}
+            }
         }
     }
     // XMP 回退：仅填 EXIF 未提供的槽。
