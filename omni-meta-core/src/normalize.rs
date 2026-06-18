@@ -415,8 +415,6 @@ pub fn normalize(
             continue;
         }
         match (t.tag, &t.value) {
-            (TAG_MAKE, Value::Text(s)) => u.camera_make = Some(s.clone()),
-            (TAG_MODEL, Value::Text(s)) => u.camera_model = Some(s.clone()),
             (TAG_ORIENTATION, Value::U16(v)) => match Orientation::from_u16(*v) {
                 Some(o) => u.orientation = Some(o),
                 None => warnings.push(Warning {
@@ -430,12 +428,6 @@ pub fn normalize(
     // XMP 回退：仅填 EXIF 未提供的槽。
     for p in &raw.xmp {
         match (p.prefix.as_str(), p.name.as_str()) {
-            ("tiff", "Make") if u.camera_make.is_none() => {
-                u.camera_make = Some(p.value.clone());
-            }
-            ("tiff", "Model") if u.camera_model.is_none() => {
-                u.camera_model = Some(p.value.clone());
-            }
             ("tiff", "Orientation") if u.orientation.is_none() => {
                 if let Ok(v) = p.value.parse::<u16>()
                     && let Some(o) = Orientation::from_u16(v)
@@ -456,6 +448,23 @@ pub fn normalize(
             _ => {}
         }
     }
+    // make/model:容器 mdta > EXIF(0x010F/0x0110) > XMP(tiff:)
+    u.camera_make = container_text(
+        raw,
+        ContainerSource::QuickTimeMdta,
+        "com.apple.quicktime.make",
+    )
+    .map(alloc::string::String::from)
+    .or_else(|| exif_primary_text(raw, TAG_MAKE))
+    .or_else(|| xmp_text(raw, "tiff", "Make"));
+    u.camera_model = container_text(
+        raw,
+        ContainerSource::QuickTimeMdta,
+        "com.apple.quicktime.model",
+    )
+    .map(alloc::string::String::from)
+    .or_else(|| exif_primary_text(raw, TAG_MODEL))
+    .or_else(|| xmp_text(raw, "tiff", "Model"));
     // created：DateTimeOriginal(Exif IFD 0x9003) 优先，回退 DateTime(IFD0 0x0132)。
     // 时区：默认 None；对应 OffsetTime* 标签存在则解析 "±HH:MM"。
     let find = |ifd: IfdKind, tag: u16| -> Option<&str> {
@@ -1452,6 +1461,38 @@ mod tests {
                 .as_deref(),
             Some("Shooter")
         );
+    }
+
+    fn make_exif_tag(ifd: IfdKind, tag: u16, text: &str) -> crate::model::ExifTag {
+        crate::model::ExifTag {
+            ifd,
+            tag,
+            value: Value::Text(alloc::string::String::from(text)),
+        }
+    }
+
+    #[test]
+    fn container_mdta_make_model_outrank_exif() {
+        use crate::model::{ContainerSource, ContainerTag, Value};
+        let mut raw = RawTags::default();
+        raw.exif
+            .push(make_exif_tag(IfdKind::Primary, 0x010F, "ExifMake"));
+        raw.exif
+            .push(make_exif_tag(IfdKind::Primary, 0x0110, "ExifModel"));
+        raw.container.push(ContainerTag {
+            source: ContainerSource::QuickTimeMdta,
+            key: alloc::string::String::from("com.apple.quicktime.make"),
+            value: Value::Text(alloc::string::String::from("Apple")),
+        });
+        raw.container.push(ContainerTag {
+            source: ContainerSource::QuickTimeMdta,
+            key: alloc::string::String::from("com.apple.quicktime.model"),
+            value: Value::Text(alloc::string::String::from("iPhone 15")),
+        });
+        let mut w = Vec::new();
+        let u = normalize(&raw, &StructuralFields::default(), &mut w);
+        assert_eq!(u.camera_make.as_deref(), Some("Apple"));
+        assert_eq!(u.camera_model.as_deref(), Some("iPhone 15"));
     }
 
     #[test]

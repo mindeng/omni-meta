@@ -122,14 +122,12 @@ fn read_u32_at(b: &[u8], off: usize) -> Option<u32> {
     Some(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
 }
 
-/// moov 解析产物：维度、时长、创建时间、GPS、make/model、警告。
+/// moov 解析产物：维度、时长、创建时间、GPS、警告。
 struct MoovInfo {
     dims: Option<(u32, u32)>,
     duration_ms: Option<u64>,
     created: Option<DateTimeParts>,
     gps: Option<Gps>,
-    camera_make: Option<alloc::string::String>,
-    camera_model: Option<alloc::string::String>,
     warnings: Vec<Warning>,
     container_tags: Vec<ContainerTag>,
 }
@@ -144,8 +142,6 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovI
         duration_ms: None,
         created: None,
         gps: None,
-        camera_make: None,
-        camera_model: None,
         warnings: Vec::new(),
         container_tags: Vec::new(),
     };
@@ -153,8 +149,6 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovI
     let mut loci_gps: Option<Gps> = None;
     let mut mdta = QtMdta {
         gps: None,
-        make: None,
-        model: None,
         created: None,
         tags: alloc::vec::Vec::new(),
     };
@@ -210,12 +204,6 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovI
                 if mdta.gps.is_none() {
                     mdta.gps = m.gps;
                 }
-                if mdta.make.is_none() {
-                    mdta.make = m.make;
-                }
-                if mdta.model.is_none() {
-                    mdta.model = m.model;
-                }
                 if mdta.created.is_none() {
                     mdta.created = m.created;
                 }
@@ -228,9 +216,6 @@ fn parse_moov(moov_payload: &[u8], moov_abs_base: u64, max_tags: usize) -> MoovI
     info.gps = xyz_gps.or(mdta.gps).or(loci_gps);
     // created：mdta creationdate 优先于 mvhd（mdta 带真实时区）。
     info.created = mdta.created.or(info.created);
-    // make/model：mdta 唯一视频来源。
-    info.camera_make = mdta.make;
-    info.camera_model = mdta.model;
     // 各来源已独立封顶：mdta 用递减预算（峰值 ≤ max_tags），udta 逐条守卫（≤ max_tags）；
     // 峰值 ≤ 2×max_tags（与 meta 盒数无关）；合并后再裁到 max_tags，使合并总量精确有界。
     info.container_tags = mdta.tags;
@@ -846,12 +831,6 @@ impl BmffParser {
             if let Some(g) = info.gps {
                 events.push(Event::Field(Field::Gps(g)));
             }
-            if let Some(make) = info.camera_make {
-                events.push(Event::Field(Field::CameraMake(make)));
-            }
-            if let Some(model) = info.camera_model {
-                events.push(Event::Field(Field::CameraModel(model)));
-            }
             for t in info.container_tags {
                 events.push(Event::ContainerTag(t));
             }
@@ -1118,8 +1097,6 @@ fn parse_iso6709(s: &str) -> Option<Gps> {
 /// QuickTime mdta 抽取产物。
 struct QtMdta {
     gps: Option<Gps>,
-    make: Option<alloc::string::String>,
-    model: Option<alloc::string::String>,
     created: Option<DateTimeParts>,
     tags: alloc::vec::Vec<ContainerTag>,
 }
@@ -1132,8 +1109,6 @@ struct QtMdta {
 fn parse_qt_mdta(meta_payload: &[u8], max_tags: usize) -> QtMdta {
     let mut out = QtMdta {
         gps: None,
-        make: None,
-        model: None,
         created: None,
         tags: alloc::vec::Vec::new(),
     };
@@ -1174,20 +1149,6 @@ fn parse_qt_mdta(meta_payload: &[u8], max_tags: usize) -> QtMdta {
                     && let Ok(s) = core::str::from_utf8(value)
                 {
                     out.gps = parse_iso6709(s);
-                }
-            }
-            "com.apple.quicktime.make" => {
-                if out.make.is_none()
-                    && let Ok(s) = core::str::from_utf8(value)
-                {
-                    out.make = Some(alloc::string::String::from(s));
-                }
-            }
-            "com.apple.quicktime.model" => {
-                if out.model.is_none()
-                    && let Ok(s) = core::str::from_utf8(value)
-                {
-                    out.model = Some(alloc::string::String::from(s));
                 }
             }
             "com.apple.quicktime.creationdate" => {
@@ -2091,7 +2052,7 @@ mod tests {
         for (i, (_, v)) in keys_and_vals.iter().enumerate() {
             let idx = (i as u32) + 1;
             let mut data = alloc::vec::Vec::new();
-            data.extend_from_slice(&[0u8; 4]); // type
+            data.extend_from_slice(&1u32.to_be_bytes()); // type=1 (DATA_UTF8)
             data.extend_from_slice(&[0u8; 4]); // locale
             data.extend_from_slice(v);
             let data_box = box_bytes(b"data", &data);
@@ -2128,8 +2089,17 @@ mod tests {
         let out = parse_qt_mdta(&meta, usize::MAX);
         let g = out.gps.expect("gps");
         assert!((g.lat_e7 - 275_916_000).abs() <= 2);
-        assert_eq!(out.make.as_deref(), Some("Apple"));
-        assert_eq!(out.model.as_deref(), Some("iPhone 15"));
+        // make/model 不再是 QtMdta 的独立字段，而是经 tags → normalize 投影
+        assert!(
+            out.tags.iter().any(|t| t.key == "com.apple.quicktime.make"
+                && matches!(&t.value, crate::model::Value::Text(s) if s == "Apple")),
+            "make 须在 tags 中"
+        );
+        assert!(
+            out.tags.iter().any(|t| t.key == "com.apple.quicktime.model"
+                && matches!(&t.value, crate::model::Value::Text(s) if s == "iPhone 15")),
+            "model 须在 tags 中"
+        );
         assert_eq!(out.created.map(|d| d.year), Some(2017));
         assert_eq!(out.created.and_then(|d| d.tz_offset_min), Some(600));
     }
@@ -2142,7 +2112,7 @@ mod tests {
         hdlr.extend_from_slice(&[0u8; 12]);
         let meta = box_bytes(b"hdlr", &hdlr);
         let out = parse_qt_mdta(&meta, usize::MAX);
-        assert!(out.gps.is_none() && out.make.is_none() && out.created.is_none());
+        assert!(out.gps.is_none() && out.tags.is_empty() && out.created.is_none());
     }
 
     #[test]
@@ -2183,7 +2153,13 @@ mod tests {
         moov_p.extend_from_slice(&box_bytes(b"meta", &meta));
         let info = parse_moov(&moov_p, 0, usize::MAX);
         assert_eq!(info.created.map(|d| d.year), Some(2017));
-        assert_eq!(info.camera_make.as_deref(), Some("Apple"));
+        // make/model 不再是 MoovInfo 的直接字段，而是经 container_tags → normalize 投影
+        assert!(
+            info.container_tags
+                .iter()
+                .any(|t| t.key == "com.apple.quicktime.make"),
+            "make 须保留在 container_tags 供 normalize 读取"
+        );
     }
 
     #[test]

@@ -113,10 +113,6 @@ pub enum Field {
     Created(DateTimeParts),
     /// 地理坐标（容器原生，如 mp4/mov udta/mdta）。
     Gps(Gps),
-    /// 相机厂商（容器原生，如 QuickTime mdta）。
-    CameraMake(String),
-    /// 相机型号（容器原生，如 QuickTime mdta）。
-    CameraModel(String),
 }
 
 /// 一条 XMP 属性。prefix 为惯用前缀（如 "tiff"），原样保留，不解析命名空间 URI。
@@ -378,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn field_has_gps_make_model_variants() {
+    fn field_has_gps_variant() {
         let g = Field::Gps(Gps {
             lat_e7: 1,
             lon_e7: 2,
@@ -391,14 +387,6 @@ mod tests {
                 lon_e7: 2,
                 alt_mm: None
             })
-        );
-        assert_eq!(
-            Field::CameraMake(String::from("Apple")),
-            Field::CameraMake(String::from("Apple"))
-        );
-        assert_ne!(
-            Field::CameraModel(String::from("iPhone 15")),
-            Field::CameraModel(String::from("iPhone 14"))
         );
     }
 

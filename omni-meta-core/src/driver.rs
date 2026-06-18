@@ -22,8 +22,6 @@ pub struct Collector {
     duration_ms: Option<u64>,
     created: Option<crate::model::DateTimeParts>,
     gps: Option<crate::model::Gps>,
-    camera_make: Option<alloc::string::String>,
-    camera_model: Option<alloc::string::String>,
     container: Vec<ContainerTag>,
     text: Vec<crate::model::TextTag>,
     limits: Limits,
@@ -80,16 +78,6 @@ impl Collector {
                     self.gps = Some(g);
                 }
             }
-            Event::Field(Field::CameraMake(s)) => {
-                if self.camera_make.is_none() {
-                    self.camera_make = Some(s);
-                }
-            }
-            Event::Field(Field::CameraModel(s)) => {
-                if self.camera_model.is_none() {
-                    self.camera_model = Some(s);
-                }
-            }
         }
     }
 }
@@ -110,7 +98,7 @@ pub enum Outcome {
 pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
     let (width, height) = (col.width, col.height);
     let (duration_ms, created) = (col.duration_ms, col.created);
-    let (gps, camera_make, camera_model) = (col.gps, col.camera_make, col.camera_model);
+    let gps = col.gps;
     let raw = RawTags {
         exif: col.exif,
         xmp: col.xmp,
@@ -125,13 +113,7 @@ pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
         created,
         gps,
     };
-    let mut unified = normalize(&raw, &structural, &mut warnings);
-    if let Some(m) = camera_make {
-        unified.camera_make = Some(m);
-    }
-    if let Some(m) = camera_model {
-        unified.camera_model = Some(m);
-    }
+    let unified = normalize(&raw, &structural, &mut warnings);
     Metadata {
         unified,
         raw,
@@ -169,8 +151,6 @@ impl StreamDriver {
                 duration_ms: None,
                 created: None,
                 gps: None,
-                camera_make: None,
-                camera_model: None,
                 container: Vec::new(),
                 text: Vec::new(),
                 limits,
@@ -388,8 +368,6 @@ pub fn drive_slice(buf: &[u8], parser: &mut dyn MetaParser, limits: Limits) -> C
         duration_ms: None,
         created: None,
         gps: None,
-        camera_make: None,
-        camera_model: None,
         container: Vec::new(),
         text: Vec::new(),
         limits,
@@ -1156,8 +1134,8 @@ mod tests {
     }
 
     #[test]
-    fn collector_applies_gps_make_model_fields() {
-        use crate::model::Gps;
+    fn collector_applies_gps_field_and_container_make_model() {
+        use crate::model::{ContainerSource, ContainerTag, Gps, Value};
         struct Emitter;
         impl MetaParser for Emitter {
             fn pull<'a>(&mut self, _input: &'a [u8]) -> crate::demand::PullResult<'a> {
@@ -1170,8 +1148,16 @@ mod tests {
                             lon_e7: 2,
                             alt_mm: Some(3)
                         })),
-                        Event::Field(Field::CameraMake(alloc::string::String::from("Apple"))),
-                        Event::Field(Field::CameraModel(alloc::string::String::from("iPhone 15"))),
+                        Event::ContainerTag(ContainerTag {
+                            source: ContainerSource::QuickTimeMdta,
+                            key: alloc::string::String::from("com.apple.quicktime.make"),
+                            value: Value::Text(alloc::string::String::from("Apple")),
+                        }),
+                        Event::ContainerTag(ContainerTag {
+                            source: ContainerSource::QuickTimeMdta,
+                            key: alloc::string::String::from("com.apple.quicktime.model"),
+                            value: Value::Text(alloc::string::String::from("iPhone 15")),
+                        }),
                     ],
                 }
             }
@@ -1208,8 +1194,6 @@ mod tests {
             duration_ms: None,
             created: None,
             gps: None,
-            camera_make: None,
-            camera_model: None,
             container: Vec::new(),
             text: Vec::new(),
             limits,
