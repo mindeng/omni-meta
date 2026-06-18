@@ -1557,4 +1557,100 @@ mod tests {
         assert_eq!(u.created.map(|d| d.year), Some(2018));
         assert_eq!(u.created.and_then(|d| d.tz_offset_min), Some(540)); // +09:00
     }
+
+    // ── 新增优先级钉销测试 ──────────────────────────────────────────────
+
+    #[test]
+    fn container_mdta_make_model_outrank_xmp_no_exif() {
+        // make/model 阶梯：容器 mdta > XMP tiff:（无 EXIF 时容器仍须胜出）
+        use crate::model::{ContainerSource, ContainerTag, Value};
+        let mut raw = RawTags::default();
+        // XMP tiff:Make / tiff:Model
+        raw.xmp.push(xmp("tiff", "Make", "XmpMake"));
+        raw.xmp.push(xmp("tiff", "Model", "XmpModel"));
+        // 容器 mdta make / model
+        raw.container.push(ContainerTag {
+            source: ContainerSource::QuickTimeMdta,
+            key: alloc::string::String::from("com.apple.quicktime.make"),
+            value: Value::Text(alloc::string::String::from("Apple")),
+        });
+        raw.container.push(ContainerTag {
+            source: ContainerSource::QuickTimeMdta,
+            key: alloc::string::String::from("com.apple.quicktime.model"),
+            value: Value::Text(alloc::string::String::from("iPhone 15")),
+        });
+        let mut w = Vec::new();
+        let u = normalize(&raw, &StructuralFields::default(), &mut w);
+        assert_eq!(u.camera_make.as_deref(), Some("Apple"));
+        assert_eq!(u.camera_model.as_deref(), Some("iPhone 15"));
+    }
+
+    #[test]
+    fn container_mdta_creationdate_outranks_exif_dto_no_structural() {
+        // created 阶梯：容器 mdta creationdate > EXIF DateTimeOriginal（无结构 created）
+        use crate::model::ContainerSource;
+        use crate::model::ContainerTag;
+        use crate::model::Value;
+        let mut raw = RawTags::default();
+        // EXIF DateTimeOriginal（Exif IFD 0x9003）= 2003
+        raw.exif
+            .push(exif_tag(IfdKind::Exif, 0x9003, "2003:01:24 09:20:00"));
+        // 容器 mdta creationdate = 2018
+        raw.container.push(ContainerTag {
+            source: ContainerSource::QuickTimeMdta,
+            key: alloc::string::String::from("com.apple.quicktime.creationdate"),
+            value: Value::Text(alloc::string::String::from("2018-05-06T12:00:00+09:00")),
+        });
+        let mut w = Vec::new();
+        // StructuralFields::default()：无结构 created
+        let u = normalize(&raw, &StructuralFields::default(), &mut w);
+        assert_eq!(u.created.map(|d| d.year), Some(2018));
+    }
+
+    #[test]
+    fn structural_gps_outranks_exif_gps() {
+        // GPS 阶梯：structural.gps > EXIF GPS IFD（structural.gps.or(u.gps) 的钉销）
+        use crate::model::Gps;
+        let raw = RawTags {
+            exif: Vec::from([
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0001,
+                    value: Value::Text(String::from("N")),
+                },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0002,
+                    value: Value::List(Vec::from([rat(10, 1), rat(0, 1), rat(0, 1)])),
+                },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0003,
+                    value: Value::Text(String::from("E")),
+                },
+                ExifTag {
+                    ifd: IfdKind::Gps,
+                    tag: 0x0004,
+                    value: Value::List(Vec::from([rat(20, 1), rat(0, 1), rat(0, 1)])),
+                },
+            ]),
+            xmp: Vec::new(),
+            container: Vec::new(),
+            text: Vec::new(),
+        };
+        // structural.gps 使用明显不同的坐标（lat=50°, lon=100°）
+        let structural = StructuralFields {
+            gps: Some(Gps {
+                lat_e7: 500_000_000,
+                lon_e7: 1_000_000_000,
+                alt_mm: None,
+            }),
+            ..StructuralFields::default()
+        };
+        let mut w = Vec::new();
+        let g = normalize(&raw, &structural, &mut w).gps.expect("gps");
+        // structural.gps 须胜过 EXIF GPS（10°N, 20°E）
+        assert_eq!(g.lat_e7, 500_000_000);
+        assert_eq!(g.lon_e7, 1_000_000_000);
+    }
 }

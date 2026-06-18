@@ -1058,7 +1058,7 @@ mod tests {
         assert_eq!(meta.unified.created.map(|d| d.year), Some(2018));
     }
 
-    /// 同时给出 EXIF DateTimeOriginal 与容器 Created：finalize 中容器值须覆盖 EXIF 派生值。
+    /// 同时给出 EXIF DateTimeOriginal 与结构 created（mvhd/EBML 类）：结构 created 须在 normalize 中压过 EXIF 派生值。
     struct ExifPlusContainerCreatedEmitter;
     impl MetaParser for ExifPlusContainerCreatedEmitter {
         fn pull<'a>(&mut self, _input: &'a [u8]) -> crate::demand::PullResult<'a> {
