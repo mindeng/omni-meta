@@ -14,8 +14,8 @@ pub struct StructuralFields {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub duration_ms: Option<u64>,
-    pub created: Option<crate::model::DateTimeParts>,
-    pub gps: Option<crate::model::Gps>,
+    pub created: Option<DateTimeParts>,
+    pub gps: Option<Gps>,
 }
 
 const TAG_MAKE: u16 = 0x010F;
@@ -530,18 +530,19 @@ pub fn normalize(
         .or_else(|| xmp_text(raw, "dc", "rights"))
         .or_else(|| png_text(raw, "Copyright"));
     u.title = xmp_text(raw, "dc", "title").or_else(|| png_text(raw, "Title"));
-    // created：normalize 内 EXIF 已优先；PNG Creation Time 末位兜底（容器在 finalize 再覆盖）
+    // created：EXIF DateTimeOriginal 优先，IFD0 次之；PNG Creation Time 末位兜底。
+    // 结构字段覆盖在函数末尾（不再经 finalize）。
     if u.created.is_none()
         && let Some(s) = png_text(raw, "Creation Time")
         && let Some(dt) = parse_png_creation_time(&s)
     {
         u.created = Some(dt);
     }
-    // 结构字段(二进制 parser 权威):压过 XMP/EXIF 派生(复现旧 finalize 覆盖)。
+    // 结构字段(二进制 parser 权威)：无条件压过 XMP/EXIF 派生值。
     u.width = structural.width.or(u.width);
     u.height = structural.height.or(u.height);
     u.duration_ms = structural.duration_ms.or(u.duration_ms);
-    u.created = structural.created.clone().or(u.created);
+    u.created = structural.created.or(u.created);
     u.gps = structural.gps.or(u.gps);
     u
 }
