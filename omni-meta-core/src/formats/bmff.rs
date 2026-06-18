@@ -2144,7 +2144,7 @@ mod tests {
         moov_p.extend_from_slice(&box_bytes(b"mvhd", &mvhd_v0(2_082_844_800, 600, 600)));
         moov_p.extend_from_slice(&box_bytes(b"meta", &meta));
         let info = parse_moov(&moov_p, 0, usize::MAX);
-        // info.created 现在是 mvhd 值（1970），mdta 不再直接影响 parser 层 created。
+        // info.created 现为 mvhd 值（此测试 mvhd_v0 编码 2_082_844_800 Mac-epoch 秒 ≈ 1970）；mdta 不再影响 parser 层 created。
         assert_eq!(info.created.map(|d| d.year), Some(1970));
         // mdta creationdate 须存在于 container_tags，供 normalize 读取后排在 mvhd 之上。
         assert!(
@@ -2197,6 +2197,38 @@ mod tests {
         assert_eq!(meta_out.unified.gps.map(|g| g.lat_e7), Some(350_000_000));
         assert_eq!(meta_out.unified.camera_make.as_deref(), Some("Apple"));
         assert_eq!(meta_out.unified.camera_model.as_deref(), Some("iPhone 15"));
+    }
+
+    /// 端到端：MOV 同时含 mvhd 时间戳（Mac-epoch 2_082_844_800 ≈ 1970）与 mdta
+    /// com.apple.quicktime.creationdate（2017），normalize 后 unified.created 应取 mdta 值
+    /// （容器 creationdate > 结构 mvhd）。
+    #[test]
+    fn end_to_end_mov_mdta_creationdate_beats_mvhd() {
+        // mdta: creationdate=2017-07-22T16:06:06+00:00，mvhd 编码 2_082_844_800 → year≈1970。
+        let meta = qt_meta_with_keys(&[(
+            "com.apple.quicktime.creationdate",
+            b"2017-07-22T16:06:06+00:00",
+        )]);
+
+        let mut moov_p = alloc::vec::Vec::new();
+        moov_p.extend_from_slice(&box_bytes(b"mvhd", &mvhd_v0(2_082_844_800, 600, 600)));
+        moov_p.extend_from_slice(&box_bytes(b"meta", &meta));
+
+        let mut f = ftyp_mp4();
+        f.extend_from_slice(&box_bytes(b"moov", &moov_p));
+
+        let col = crate::driver::drive_slice(
+            &f,
+            &mut BmffParser::new(),
+            crate::limits::Limits::default(),
+        );
+        let meta_out = crate::driver::finalize(col, crate::model::FileFormat::Mov);
+        // mdta creationdate 应胜出，year=2017；若 mvhd 胜出则为 1970。
+        assert_eq!(
+            meta_out.unified.created.map(|d| d.year),
+            Some(2017),
+            "unified.created 须取 mdta creationdate (2017)，而非 mvhd (1970)"
+        );
     }
 
     #[test]

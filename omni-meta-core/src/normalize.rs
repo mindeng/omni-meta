@@ -539,15 +539,15 @@ pub fn normalize(
         .or_else(|| xmp_text(raw, "dc", "rights"))
         .or_else(|| png_text(raw, "Copyright"));
     u.title = xmp_text(raw, "dc", "title").or_else(|| png_text(raw, "Title"));
-    // created：EXIF DateTimeOriginal 优先，IFD0 次之；PNG Creation Time 末位兜底。
-    // 结构字段覆盖在函数末尾（不再经 finalize）。
+    // created (EXIF 层)：DateTimeOriginal 优先，IFD0 次之；PNG Creation Time 末位兜底。
+    // 最终优先级在本函数末尾统一排序：容器 mdta > 结构(mvhd/EBML) > EXIF > PNG。
     if u.created.is_none()
         && let Some(s) = png_text(raw, "Creation Time")
         && let Some(dt) = parse_png_creation_time(&s)
     {
         u.created = Some(dt);
     }
-    // 结构字段(二进制 parser 权威)：无条件压过 XMP/EXIF 派生值。
+    // 结构字段(二进制 parser 权威)：无条件压过 XMP/EXIF 派生值（created 单独处理，见下）。
     u.width = structural.width.or(u.width);
     u.height = structural.height.or(u.height);
     u.duration_ms = structural.duration_ms.or(u.duration_ms);
