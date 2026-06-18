@@ -1105,7 +1105,7 @@ struct QtMdta {
 /// 任一缺失/畸形 → 对应字段 None，绝不 panic。
 /// 注意：个别写入方（如 FCP7）在 moov/meta 前置 4 字节规范外 version/flags；
 /// 本实现不兼容该情形，遇此则 mdta 字段静默为空（无警告）。
-/// `max_tags`：out.tags 源头上限，防 DoS 放大（Field 投影字段不受此限）。
+/// `max_tags`：out.tags 源头上限，防 DoS 放大。
 fn parse_qt_mdta(meta_payload: &[u8], max_tags: usize) -> QtMdta {
     let mut out = QtMdta {
         gps: None,
@@ -2157,8 +2157,9 @@ mod tests {
         assert!(
             info.container_tags
                 .iter()
-                .any(|t| t.key == "com.apple.quicktime.make"),
-            "make 须保留在 container_tags 供 normalize 读取"
+                .any(|t| t.key == "com.apple.quicktime.make"
+                    && matches!(&t.value, crate::model::Value::Text(s) if s == "Apple")),
+            "make 须保留在 container_tags 供 normalize 读取，且值须为 Apple"
         );
     }
 

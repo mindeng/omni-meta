@@ -691,7 +691,7 @@ pub fn qt_meta_with_keys_local(keys_and_vals: &[(&str, &[u8])]) -> Vec<u8> {
     for (i, (_, v)) in keys_and_vals.iter().enumerate() {
         let idx = (i as u32) + 1;
         let mut data_payload = Vec::new();
-        data_payload.extend_from_slice(&1u32.to_be_bytes()); // type=1 (DATA_UTF8)
+        data_payload.extend_from_slice(&1u32.to_be_bytes()); // type=1 (DATA_UTF8)；0 会被解析器过滤（仅 type==1 的 UTF-8 值进入 container_tags）
         data_payload.extend_from_slice(&[0u8; 4]); // locale
         data_payload.extend_from_slice(v);
         let data_box = bmff_box(b"data", &data_payload);
