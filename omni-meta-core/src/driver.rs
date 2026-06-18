@@ -118,22 +118,14 @@ pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
         text: col.text,
     };
     let mut warnings = col.warnings;
-    let mut unified = normalize(&raw, &mut warnings);
-    if let Some(w) = width {
-        unified.width = Some(w);
-    }
-    if let Some(h) = height {
-        unified.height = Some(h);
-    }
-    if let Some(d) = duration_ms {
-        unified.duration_ms = Some(d);
-    }
-    if let Some(c) = created {
-        unified.created = Some(c); // 容器（moov）优先于 EXIF 派生
-    }
-    if let Some(g) = gps {
-        unified.gps = Some(g);
-    }
+    let structural = crate::normalize::StructuralFields {
+        width,
+        height,
+        duration_ms,
+        created,
+        gps,
+    };
+    let mut unified = normalize(&raw, &structural, &mut warnings);
     if let Some(m) = camera_make {
         unified.camera_make = Some(m);
     }

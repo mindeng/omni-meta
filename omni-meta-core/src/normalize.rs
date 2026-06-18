@@ -7,6 +7,17 @@ use crate::model::{
     Warning,
 };
 
+/// 二进制结构来源候选(无命名空间、parser 权威):容器结构头与二进制 udta。
+/// 由 `driver::Collector` 从 `Event::Field` 累积,作为 normalize 的一类来源传入。
+#[derive(Debug, Clone, Default)]
+pub struct StructuralFields {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub duration_ms: Option<u64>,
+    pub created: Option<crate::model::DateTimeParts>,
+    pub gps: Option<crate::model::Gps>,
+}
+
 const TAG_MAKE: u16 = 0x010F;
 const TAG_MODEL: u16 = 0x0110;
 const TAG_ORIENTATION: u16 = 0x0112;
@@ -393,7 +404,11 @@ fn parse_bare_date(s: &str) -> Option<DateTimeParts> {
 /// 丢弃该值并向 `warnings` 追加一条 `WarnKind::UnrecognizedValue`，使调用者能
 /// 区分”缺失”与”存在但无法识别”。normalize 作用于已解码标签、无字节偏移，
 /// 故此类警告的 `offset` 固定为 0。
-pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
+pub fn normalize(
+    raw: &RawTags,
+    structural: &StructuralFields,
+    warnings: &mut Vec<Warning>,
+) -> Unified {
     let mut u = Unified::default();
     for t in &raw.exif {
         if t.ifd != IfdKind::Primary {
@@ -522,6 +537,12 @@ pub fn normalize(raw: &RawTags, warnings: &mut Vec<Warning>) -> Unified {
     {
         u.created = Some(dt);
     }
+    // 结构字段(二进制 parser 权威):压过 XMP/EXIF 派生(复现旧 finalize 覆盖)。
+    u.width = structural.width.or(u.width);
+    u.height = structural.height.or(u.height);
+    u.duration_ms = structural.duration_ms.or(u.duration_ms);
+    u.created = structural.created.clone().or(u.created);
+    u.gps = structural.gps.or(u.gps);
     u
 }
 
@@ -707,7 +728,7 @@ mod tests {
             text: Vec::new(),
         };
         let mut warnings = Vec::new();
-        let u = normalize(&raw, &mut warnings);
+        let u = normalize(&raw, &StructuralFields::default(), &mut warnings);
         assert_eq!(u.camera_make.as_deref(), Some("Acme"));
         assert_eq!(u.camera_model.as_deref(), Some("X100"));
         assert_eq!(u.orientation, Some(Orientation::Rotate90));
@@ -727,7 +748,7 @@ mod tests {
             text: Vec::new(),
         };
         let mut warnings = Vec::new();
-        let u = normalize(&raw, &mut warnings);
+        let u = normalize(&raw, &StructuralFields::default(), &mut warnings);
         assert_eq!(u.orientation, None);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].kind, WarnKind::UnrecognizedValue);
@@ -756,7 +777,7 @@ mod tests {
             text: Vec::new(),
         };
         let mut warnings = Vec::new();
-        let u = normalize(&raw, &mut warnings);
+        let u = normalize(&raw, &StructuralFields::default(), &mut warnings);
         assert_eq!(u.camera_make.as_deref(), Some("XmpMake"));
         assert_eq!(u.camera_model.as_deref(), Some("XmpModel"));
         assert_eq!(u.orientation, Some(Orientation::Rotate90));
@@ -777,7 +798,7 @@ mod tests {
             text: Vec::new(),
         };
         let mut warnings = Vec::new();
-        let u = normalize(&raw, &mut warnings);
+        let u = normalize(&raw, &StructuralFields::default(), &mut warnings);
         assert_eq!(u.camera_make.as_deref(), Some("ExifMake"));
     }
 
@@ -803,7 +824,7 @@ mod tests {
             text: Vec::new(),
         };
         let mut warnings = Vec::new();
-        let u = normalize(&raw, &mut warnings);
+        let u = normalize(&raw, &StructuralFields::default(), &mut warnings);
         assert_eq!(u.orientation, Some(Orientation::Normal));
         assert!(warnings.is_empty(), "warnings: {:?}", warnings);
     }
@@ -825,7 +846,7 @@ mod tests {
             text: Vec::new(),
         };
         let mut w = Vec::new();
-        let u = normalize(&raw, &mut w);
+        let u = normalize(&raw, &StructuralFields::default(), &mut w);
         let c = u.created.expect("created");
         assert_eq!(
             (c.year, c.month, c.day, c.hour, c.minute, c.second),
@@ -846,7 +867,7 @@ mod tests {
             text: Vec::new(),
         };
         let mut w = Vec::new();
-        let u = normalize(&raw, &mut w);
+        let u = normalize(&raw, &StructuralFields::default(), &mut w);
         assert_eq!(u.created.unwrap().tz_offset_min, Some(540));
     }
 
@@ -862,7 +883,7 @@ mod tests {
             text: Vec::new(),
         };
         let mut w = Vec::new();
-        let u = normalize(&raw, &mut w);
+        let u = normalize(&raw, &StructuralFields::default(), &mut w);
         let c = u.created.expect("created");
         assert_eq!((c.year, c.month, c.day), (1999, 12, 31));
         assert_eq!(c.tz_offset_min, Some(-300));
@@ -880,7 +901,7 @@ mod tests {
             text: Vec::new(),
         };
         let mut w = Vec::new();
-        let u = normalize(&raw, &mut w);
+        let u = normalize(&raw, &StructuralFields::default(), &mut w);
         assert_eq!(u.created.unwrap().year, 2003);
     }
 
@@ -900,7 +921,7 @@ mod tests {
                 text: Vec::new(),
             };
             let mut w = Vec::new();
-            let u = normalize(&raw, &mut w);
+            let u = normalize(&raw, &StructuralFields::default(), &mut w);
             assert_eq!(u.created, None, "input {bad:?} 应判为无效");
         }
     }
@@ -956,7 +977,9 @@ mod tests {
             text: Vec::new(),
         };
         let mut w = Vec::new();
-        let g = normalize(&raw, &mut w).gps.expect("gps");
+        let g = normalize(&raw, &StructuralFields::default(), &mut w)
+            .gps
+            .expect("gps");
         assert!((g.lat_e7 - 275_916_000).abs() <= 2, "lat_e7={}", g.lat_e7);
         assert!((g.lon_e7 + 865_640_000).abs() <= 2, "lon_e7={}", g.lon_e7);
         assert_eq!(g.alt_mm, None);
@@ -1002,7 +1025,9 @@ mod tests {
             text: Vec::new(),
         };
         let mut w = Vec::new();
-        let g = normalize(&raw, &mut w).gps.expect("gps");
+        let g = normalize(&raw, &StructuralFields::default(), &mut w)
+            .gps
+            .expect("gps");
         assert_eq!(g.lat_e7, 100_000_000);
         assert_eq!(g.lon_e7, 200_000_000);
         assert_eq!(g.alt_mm, Some(-10_500));
@@ -1028,7 +1053,7 @@ mod tests {
             text: Vec::new(),
         };
         let mut w = Vec::new();
-        let u = normalize(&raw, &mut w);
+        let u = normalize(&raw, &StructuralFields::default(), &mut w);
         assert_eq!(u.gps, None);
         assert_eq!(
             w.iter()
@@ -1059,7 +1084,9 @@ mod tests {
             text: Vec::new(),
         };
         let mut w = Vec::new();
-        let g = normalize(&raw, &mut w).gps.expect("gps");
+        let g = normalize(&raw, &StructuralFields::default(), &mut w)
+            .gps
+            .expect("gps");
         assert!((g.lat_e7 - 399_515_000).abs() <= 2, "lat_e7={}", g.lat_e7);
         assert!((g.lon_e7 - 1_163_900_000).abs() <= 2, "lon_e7={}", g.lon_e7);
     }
@@ -1141,7 +1168,9 @@ mod tests {
             text: Vec::new(),
         };
         let mut w = Vec::new();
-        let g = normalize(&raw, &mut w).gps.expect("gps");
+        let g = normalize(&raw, &StructuralFields::default(), &mut w)
+            .gps
+            .expect("gps");
         assert_eq!(g.lat_e7, 100_000_000); // EXIF 的 10°，非 XMP 的 39°
     }
 
@@ -1158,7 +1187,9 @@ mod tests {
             text: Vec::new(),
         };
         let mut w = Vec::new();
-        let g = normalize(&raw, &mut w).gps.expect("gps");
+        let g = normalize(&raw, &StructuralFields::default(), &mut w)
+            .gps
+            .expect("gps");
         assert_eq!(g.lat_e7, 399_515_000);
         assert_eq!(g.lon_e7, 1_163_900_000);
     }
@@ -1176,7 +1207,9 @@ mod tests {
             text: Vec::new(),
         };
         let mut w = Vec::new();
-        let g = normalize(&raw, &mut w).gps.expect("gps");
+        let g = normalize(&raw, &StructuralFields::default(), &mut w)
+            .gps
+            .expect("gps");
         assert!((g.lat_e7 - 399_515_000).abs() <= 2);
         assert!((g.lon_e7 - 1_163_900_000).abs() <= 2);
     }
@@ -1203,7 +1236,7 @@ mod tests {
             }],
             text: Vec::new(),
         };
-        let u = normalize(&raw, &mut warnings);
+        let u = normalize(&raw, &StructuralFields::default(), &mut warnings);
         assert_eq!(u.software.as_deref(), Some("ContainerSW"));
     }
 
@@ -1222,7 +1255,9 @@ mod tests {
             text: Vec::new(),
         };
         assert_eq!(
-            normalize(&raw_exif, &mut warnings).software.as_deref(),
+            normalize(&raw_exif, &StructuralFields::default(), &mut warnings)
+                .software
+                .as_deref(),
             Some("ExifSW")
         );
         let raw_xmp = RawTags {
@@ -1236,7 +1271,9 @@ mod tests {
             text: Vec::new(),
         };
         assert_eq!(
-            normalize(&raw_xmp, &mut warnings).software.as_deref(),
+            normalize(&raw_xmp, &StructuralFields::default(), &mut warnings)
+                .software
+                .as_deref(),
             Some("XmpSW")
         );
     }
@@ -1254,14 +1291,22 @@ mod tests {
     #[test]
     fn png_author_projects_creator_as_fallback() {
         let mut w = Vec::new();
-        let u = normalize(&raw_with_text("Author", "Ada"), &mut w);
+        let u = normalize(
+            &raw_with_text("Author", "Ada"),
+            &StructuralFields::default(),
+            &mut w,
+        );
         assert_eq!(u.creator.as_deref(), Some("Ada"));
     }
 
     #[test]
     fn png_software_projects_software_as_fallback() {
         let mut w = Vec::new();
-        let u = normalize(&raw_with_text("Software", "OmniTool"), &mut w);
+        let u = normalize(
+            &raw_with_text("Software", "OmniTool"),
+            &StructuralFields::default(),
+            &mut w,
+        );
         assert_eq!(u.software.as_deref(), Some("OmniTool"));
     }
 
@@ -1269,21 +1314,33 @@ mod tests {
     fn png_new_fields_project() {
         let mut w = Vec::new();
         assert_eq!(
-            normalize(&raw_with_text("Title", "T"), &mut w)
-                .title
-                .as_deref(),
+            normalize(
+                &raw_with_text("Title", "T"),
+                &StructuralFields::default(),
+                &mut w
+            )
+            .title
+            .as_deref(),
             Some("T")
         );
         assert_eq!(
-            normalize(&raw_with_text("Description", "D"), &mut w)
-                .description
-                .as_deref(),
+            normalize(
+                &raw_with_text("Description", "D"),
+                &StructuralFields::default(),
+                &mut w
+            )
+            .description
+            .as_deref(),
             Some("D")
         );
         assert_eq!(
-            normalize(&raw_with_text("Copyright", "C"), &mut w)
-                .copyright
-                .as_deref(),
+            normalize(
+                &raw_with_text("Copyright", "C"),
+                &StructuralFields::default(),
+                &mut w
+            )
+            .copyright
+            .as_deref(),
             Some("C")
         );
     }
@@ -1303,7 +1360,12 @@ mod tests {
             ..Default::default()
         };
         let mut w = Vec::new();
-        assert_eq!(normalize(&raw, &mut w).creator.as_deref(), Some("FromXmp"));
+        assert_eq!(
+            normalize(&raw, &StructuralFields::default(), &mut w)
+                .creator
+                .as_deref(),
+            Some("FromXmp")
+        );
     }
 
     #[test]
@@ -1314,7 +1376,11 @@ mod tests {
             ("2021-07-06", 2021, 7, 6, 0),
         ] {
             let mut w = Vec::new();
-            let u = normalize(&raw_with_text("Creation Time", input), &mut w);
+            let u = normalize(
+                &raw_with_text("Creation Time", input),
+                &StructuralFields::default(),
+                &mut w,
+            );
             let c = u.created.unwrap_or_else(|| panic!("未解析: {input}"));
             assert_eq!((c.year, c.month, c.day, c.hour), (y, mo, d, h), "{input}");
         }
@@ -1325,6 +1391,7 @@ mod tests {
         let mut w = Vec::new();
         let u = normalize(
             &raw_with_text("Creation Time", "sometime last summer"),
+            &StructuralFields::default(),
             &mut w,
         );
         assert!(u.created.is_none());
@@ -1341,7 +1408,11 @@ mod tests {
             ..Default::default()
         };
         let mut w = Vec::new();
-        assert!(normalize(&raw, &mut w).creator.is_none());
+        assert!(
+            normalize(&raw, &StructuralFields::default(), &mut w)
+                .creator
+                .is_none()
+        );
     }
 
     #[test]
@@ -1359,7 +1430,9 @@ mod tests {
             text: Vec::new(),
         };
         assert_eq!(
-            normalize(&raw_udta, &mut warnings).creator.as_deref(),
+            normalize(&raw_udta, &StructuralFields::default(), &mut warnings)
+                .creator
+                .as_deref(),
             Some("Auteur")
         );
         let raw_artist = RawTags {
@@ -1373,8 +1446,34 @@ mod tests {
             text: Vec::new(),
         };
         assert_eq!(
-            normalize(&raw_artist, &mut warnings).creator.as_deref(),
+            normalize(&raw_artist, &StructuralFields::default(), &mut warnings)
+                .creator
+                .as_deref(),
             Some("Shooter")
         );
+    }
+
+    #[test]
+    fn structural_created_outranks_exif_derived() {
+        use crate::model::DateTimeParts;
+        // EXIF DateTime(IFD0 0x0132)=2003,结构候选=2018
+        let mut raw = RawTags::default();
+        raw.exif
+            .push(exif_tag(IfdKind::Primary, 0x0132, "2003:01:02 03:04:05"));
+        let structural = StructuralFields {
+            created: Some(DateTimeParts {
+                year: 2018,
+                month: 1,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                tz_offset_min: Some(0),
+            }),
+            ..StructuralFields::default()
+        };
+        let mut w = Vec::new();
+        let u = normalize(&raw, &structural, &mut w);
+        assert_eq!(u.created.map(|d| d.year), Some(2018));
     }
 }
