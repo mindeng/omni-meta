@@ -1,6 +1,6 @@
 # omni-meta Roadmap
 
-**活文档** · 最近更新 2026-06-17（testing-hardening 完成：no_std CI 裸机真证 + exiftool 核对的黄金样本）· 维护者随进度勾选
+**活文档** · 最近更新 2026-06-23（新增里程碑 G 流式 `EventParser` 设计：push 式 raw 条目流 + 提前终止）· 维护者随进度勾选
 基准设计：[`docs/superpowers/specs/2026-06-14-omni-meta-design.md`](superpowers/specs/2026-06-14-omni-meta-design.md)
 
 > 本文档替代原设计 §11 的线性 phase 表——实际推进中适配器被提前完成、各纵切片
@@ -49,7 +49,7 @@
 
 ### 尚未开始 ⬜
 
-IPTC codec · ICC 摘要 · TIFF 顶层格式 · async/tokio 适配器 · `video_codec`/`audio_codec` 等 Unified 字段扩展 · `cargo-fuzz`（横切，各容器/codec）
+IPTC codec · ICC 摘要 · TIFF 顶层格式 · **流式 `EventParser`（push 式 raw 条目流 + 提前终止，里程碑 G）** · async/tokio 适配器 · `video_codec`/`audio_codec` 等 Unified 字段扩展
 
 ---
 
@@ -137,6 +137,17 @@ IPTC codec · ICC 摘要 · TIFF 顶层格式 · async/tokio 适配器 · `video
 - [x] `strip.rs`：sans-io 重写状态机，复用容器读取器，丢弃 EXIF/XMP/IPTC/ICC
 - [x] `strip_blocking` + `StripReport`
 - [x] 优先 JPEG/PNG/WebP（隐私场景最常用）；box 类作为 stretch
+
+### 里程碑 G — 流式 `EventParser`（push 式 raw 条目流 + 提前终止）⬜ 设计已定 — 设计 `specs/2026-06-23-streaming-event-parser-design.md`
+
+**为什么做**：应用层在喂数据的同时挨个拿到 raw 元数据条目，拿到所需即提前终止，省掉文件尾部喂入/解析。核心已是 sans-io 事件驱动，本里程碑只把 `Collector` 内部吞掉的事件流「开口」给应用层，对 `finalize`/`normalize`/`PushParser` 零改动。
+
+- [ ] `adapters/event.rs`：`EventParser`（push，`feed`→`Outcome` + 内部记顺序日志、`drain()` 迭代器、`skip`、`finish`）
+- [ ] 公开 `MetaItem<'a>`：**借用零拷贝**（Exif/Xmp/Container/Text 借 typed vecs，结构标量内联），按文档顺序交付；`#[non_exhaustive]`
+- [ ] `Collector` 增 `order: Option<Vec<Slot>>`（`None` 路径零行为/零开销变化）+ `handle` 顺序日志记录；`StreamDriver` 增 `collector_ref` + streaming 构造
+- [ ] **借用约束**：持有 `MetaItem<'a>` 时不可 `feed`（防 `feed` realloc vecs 悬垂）；跨 feed 留存某条→`.clone()`。文档化
+- [ ] 测试：drain 全条目重组 == `read_slice` raw 层 + 结构字段；`finish()` byte-equal `PushParser::finish()`；文档顺序；提前终止不 panic；chunk 不变性；no_std 构建
+- [ ] **不在本期**：async（程碑 D）、声明式兴趣集「省解析」（spec §8 备忘）、稳定地址存储（spec 方案 C）
 
 ---
 
