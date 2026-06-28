@@ -452,6 +452,30 @@ pub fn normalize(
             _ => {}
         }
     }
+    // sidecar XMP 兜底：仅填内嵌（EXIF + 内嵌 xmp）仍缺的技术槽。
+    // 置于内嵌 xmp 循环之后；函数尾部 structural 的 `.or` 覆盖仍恒压过 sidecar。
+    for p in &raw.xmp_sidecar {
+        match (p.prefix.as_str(), p.name.as_str()) {
+            ("tiff", "Orientation") if u.orientation.is_none() => {
+                if let Ok(v) = p.value.parse::<u16>()
+                    && let Some(o) = Orientation::from_u16(v)
+                {
+                    u.orientation = Some(o);
+                }
+            }
+            ("tiff", "ImageWidth") if u.width.is_none() => {
+                if let Ok(v) = p.value.parse::<u32>() {
+                    u.width = Some(v);
+                }
+            }
+            ("tiff", "ImageLength") if u.height.is_none() => {
+                if let Ok(v) = p.value.parse::<u32>() {
+                    u.height = Some(v);
+                }
+            }
+            _ => {}
+        }
+    }
     // make/model:容器 mdta > EXIF(0x010F/0x0110) > XMP(tiff:)
     u.camera_make = container_text(
         raw,
@@ -460,7 +484,8 @@ pub fn normalize(
     )
     .map(alloc::string::String::from)
     .or_else(|| exif_primary_text(raw, TAG_MAKE))
-    .or_else(|| xmp_text(raw, "tiff", "Make"));
+    .or_else(|| xmp_text(raw, "tiff", "Make"))
+    .or_else(|| xmp_sidecar_text(raw, "tiff", "Make"));
     u.camera_model = container_text(
         raw,
         ContainerSource::QuickTimeMdta,
@@ -468,7 +493,8 @@ pub fn normalize(
     )
     .map(alloc::string::String::from)
     .or_else(|| exif_primary_text(raw, TAG_MODEL))
-    .or_else(|| xmp_text(raw, "tiff", "Model"));
+    .or_else(|| xmp_text(raw, "tiff", "Model"))
+    .or_else(|| xmp_sidecar_text(raw, "tiff", "Model"));
     // created：DateTimeOriginal(Exif IFD 0x9003) 优先，回退 DateTime(IFD0 0x0132)。
     // 时区：默认 None；对应 OffsetTime* 标签存在则解析 "±HH:MM"。
     let find = |ifd: IfdKind, tag: u16| -> Option<&str> {
@@ -1684,7 +1710,6 @@ mod tests {
 
     #[test]
     fn sidecar_description_beats_exif_and_embedded_xmp() {
-        use crate::model::RawTags;
         let raw = RawTags {
             exif: vec![ExifTag {
                 ifd: IfdKind::Primary,
@@ -1699,5 +1724,59 @@ mod tests {
         let mut w = Vec::new();
         let u = normalize(&raw, &StructuralFields::default(), &mut w);
         assert_eq!(u.description.as_deref(), Some("from-sidecar"));
+    }
+
+    #[test]
+    fn sidecar_make_only_fills_when_embedded_absent() {
+        // (a) 内嵌 EXIF Make 存在 → sidecar 不得覆盖
+        let raw_a = RawTags {
+            exif: vec![ExifTag {
+                ifd: IfdKind::Primary,
+                tag: 0x010F,
+                value: Value::Text(String::from("EmbeddedCam")),
+            }],
+            xmp: vec![],
+            xmp_sidecar: vec![xmp("tiff", "Make", "SidecarCam")],
+            container: vec![],
+            text: vec![],
+        };
+        let mut w = Vec::new();
+        assert_eq!(
+            normalize(&raw_a, &StructuralFields::default(), &mut w).camera_make.as_deref(),
+            Some("EmbeddedCam")
+        );
+        // (b) 内嵌全缺 → sidecar 兜底
+        let raw_b = RawTags {
+            exif: vec![],
+            xmp: vec![],
+            xmp_sidecar: vec![xmp("tiff", "Make", "SidecarCam")],
+            container: vec![],
+            text: vec![],
+        };
+        assert_eq!(
+            normalize(&raw_b, &StructuralFields::default(), &mut w).camera_make.as_deref(),
+            Some("SidecarCam")
+        );
+    }
+
+    #[test]
+    fn sidecar_orientation_and_dims_fill_when_embedded_absent() {
+        // EXIF/内嵌 xmp/structural 全缺 → sidecar 的 tiff:* 技术槽兜底填入。
+        let raw = RawTags {
+            exif: vec![],
+            xmp: vec![],
+            xmp_sidecar: vec![
+                xmp("tiff", "Orientation", "6"),
+                xmp("tiff", "ImageWidth", "800"),
+                xmp("tiff", "ImageLength", "600"),
+            ],
+            container: vec![],
+            text: vec![],
+        };
+        let mut w = Vec::new();
+        let u = normalize(&raw, &StructuralFields::default(), &mut w);
+        assert_eq!(u.orientation, Some(Orientation::Rotate90)); // 6 → Rotate90
+        assert_eq!(u.width, Some(800));
+        assert_eq!(u.height, Some(600));
     }
 }
