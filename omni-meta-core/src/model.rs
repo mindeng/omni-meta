@@ -170,7 +170,7 @@ pub struct ExifTag {
 /// 由 `driver::Collector` 从 `Event::Field` 累积，作为 normalize 的一类来源传入；
 /// 并由 `finalize` 存入 `Metadata.structural` 供 `with_xmp_sidecar` 重投影复用。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct StructuralFields {
+pub(crate) struct StructuralFields {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub duration_ms: Option<u64>,

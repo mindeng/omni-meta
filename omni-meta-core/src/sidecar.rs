@@ -120,6 +120,23 @@ mod tests {
     }
 
     #[test]
+    fn oversize_sidecar_warns_truncated_unified_unchanged() {
+        use crate::limits::Limits;
+        use crate::model::WarnKind;
+        let img = jpeg_with_make();
+        let meta = read_slice(&img, Options::default()).unwrap();
+        // 自定义极小 max_payload_bytes，使合法 sidecar 因超限被拒（无需 64MB 巨包）。
+        let tiny = Limits {
+            max_payload_bytes: 8,
+            ..Limits::default()
+        };
+        let after = meta.clone().with_xmp_sidecar(SIDECAR, tiny);
+        assert_eq!(after.unified, meta.unified); // 超限不改 Unified
+        assert!(after.raw.xmp_sidecar.is_empty()); // 无属性注入
+        assert!(after.warnings.iter().any(|w| w.kind == WarnKind::Truncated));
+    }
+
+    #[test]
     fn double_sidecar_is_stable() {
         let img = jpeg_with_make();
         let meta = read_slice(&img, Options::default()).unwrap();
