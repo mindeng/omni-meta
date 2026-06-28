@@ -91,7 +91,7 @@ pub struct Metadata {
 - `structural` 取 **`pub(crate)`**：仅 crate 内 `with_xmp_sidecar` 读取，外部无需访问（其内容已全在 `Unified` 暴露）。因此 `StructuralFields` **保持 `pub(crate)`**，无需提为 pub、无需 crate 根 `pub use`——公开类型面不增。其字段已 `pub`，派生 `Clone, Default`。
 - `finalize(col, format)` 改为在投影后把 `structural` 一并存入返回的 `Metadata`（当前它构造完 `structural` 即丢弃，改为 move 进结果）。
 
-> **破坏性**：`Metadata` 新增字段会破坏外部 struct-literal 构造与穷尽匹配（`pub` 或 `pub(crate)` 同此破坏，但后者公开面更小）；库 pre-1.0、且 `Metadata` 为只读产物（经 `read_slice` 等获取，非字面量构造），可接受。plan 中在 CHANGELOG/ROADMAP 注明。
+> **破坏性**：`Metadata` 新增 `pub(crate)` 字段使**外部 crate 无法再用 struct-literal 构造** `Metadata`（任一私有字段即禁用字面量语法）。工作区内 `omni-meta-fixtures` 的测试辅助 `meta_with_warnings` 正是字面量构造——需改造。对策：给 `Metadata` 派生 `Default`（连带 `FileFormat` 派生 `Default`，默认 `Unknown`），外部构造改走 `Metadata::default()` + 字段赋值（`structural` 留默认）。此法保留 `pub(crate)` 的小公开面，`Default` 为标准 trait、无 bespoke API。库 pre-1.0，可接受。
 
 ---
 
