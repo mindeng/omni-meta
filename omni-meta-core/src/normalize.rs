@@ -3,13 +3,14 @@
 //! normalize 是每个 Unified 字段跨源优先级的唯一权威。来源分两类：
 //! 文本/命名空间来源（RawTags.container / exif / xmp / png 文本）在此直接读取；
 //! 二进制结构来源（容器结构头、二进制 udta）经 `StructuralFields` 由 driver 传入。
-//! 例外：GPS 因阶梯交错二进制源，整体在 parser 解析后作为 StructuralFields.gps 传入。
+//! 例外：GPS 多路来源——EXIF GPS IFD 与 XMP（内嵌 + sidecar）在此直接投影；
+//! 二进制阶梯源（容器 udta/ISO6709 等）经 `StructuralFields.gps` 传入，并在末尾 `.or` 覆盖。
 
 use alloc::vec::Vec;
 
 use crate::model::{
     ContainerSource, DateTimeParts, Gps, IfdKind, Orientation, RawTags, StructuralFields, Unified,
-    Value, WarnKind, Warning,
+    Value, WarnKind, Warning, XmpProperty,
 };
 
 const TAG_MAKE: u16 = 0x010F;
@@ -172,21 +173,18 @@ fn parse_xmp_coord(s: &str) -> Option<i32> {
     i32::try_from(e7).ok()
 }
 
-/// XMP 回退坐标：lat+lon 都成功才 Some。altitude 暂不从 XMP 取（来源足够，YAGNI）。
-fn gps_from_xmp(raw: &RawTags) -> Option<Gps> {
+/// XMP 回退坐标：从给定属性切片读 exif:GPSLatitude/Longitude。lat+lon 都成功才 Some。
+/// altitude 暂不从 XMP 取（来源足够，YAGNI）。
+fn gps_from_xmp_props(props: &[XmpProperty]) -> Option<Gps> {
     let get = |name: &str| {
-        raw.xmp
+        props
             .iter()
             .find(|p| p.prefix == "exif" && p.name == name)
             .map(|p| p.value.as_str())
     };
     let lat = parse_xmp_coord(get("GPSLatitude")?)?;
     let lon = parse_xmp_coord(get("GPSLongitude")?)?;
-    Some(Gps {
-        lat_e7: lat,
-        lon_e7: lon,
-        alt_mm: None,
-    })
+    Some(Gps { lat_e7: lat, lon_e7: lon, alt_mm: None })
 }
 
 /// 从 EXIF GPS IFD 投影坐标。lat+lon 都成功才返回 Some；altitude 可选。
@@ -535,9 +533,7 @@ pub fn normalize(
                 kind: WarnKind::UnrecognizedValue,
             });
         }
-        if let Some(g) = gps_from_xmp(raw) {
-            u.gps = Some(g);
-        }
+        u.gps = gps_from_xmp_props(&raw.xmp).or_else(|| gps_from_xmp_props(&raw.xmp_sidecar));
     }
     // software：容器 > EXIF(0x0131) > XMP(xmp:CreatorTool) > PNG Software
     u.software = container_text(
@@ -1757,6 +1753,26 @@ mod tests {
             normalize(&raw_b, &StructuralFields::default(), &mut w).camera_make.as_deref(),
             Some("SidecarCam")
         );
+    }
+
+    #[test]
+    fn sidecar_gps_fills_when_exif_and_embedded_xmp_absent() {
+        let raw = RawTags {
+            exif: vec![],
+            xmp: vec![],
+            xmp_sidecar: vec![
+                xmp("exif", "GPSLatitude", "37,48.0N"),
+                xmp("exif", "GPSLongitude", "122,25.0W"),
+            ],
+            container: vec![],
+            text: vec![],
+        };
+        let mut w = Vec::new();
+        let g = normalize(&raw, &StructuralFields::default(), &mut w).gps;
+        let g = g.expect("sidecar exif:GPS* 应兜底投影");
+        // 37°48.0' N = 37.8° → 378_000_000 E7（精确锚点，防"符号对、量级错"漏判）。
+        assert_eq!(g.lat_e7, 378_000_000);
+        assert!(g.lon_e7 < 0); // 122°25.0' W → 西经为负
     }
 
     #[test]
