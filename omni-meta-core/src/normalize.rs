@@ -275,6 +275,17 @@ fn xmp_text(raw: &RawTags, prefix: &str, name: &str) -> Option<alloc::string::St
     })
 }
 
+/// 取指定 prefix/name 的 sidecar XMP 属性值（扫 `raw.xmp_sidecar`）。
+fn xmp_sidecar_text(raw: &RawTags, prefix: &str, name: &str) -> Option<alloc::string::String> {
+    raw.xmp_sidecar.iter().find_map(|p| {
+        if p.prefix == prefix && p.name == name {
+            Some(p.value.clone())
+        } else {
+            None
+        }
+    })
+}
+
 /// 取 raw.text 中首个匹配 keyword 的**明文**值（Latin1/Utf8）；压缩变体跳过。
 fn png_text(raw: &RawTags, keyword: &str) -> Option<alloc::string::String> {
     raw.text.iter().find_map(|t| {
@@ -513,25 +524,30 @@ pub fn normalize(
     .or_else(|| exif_primary_text(raw, TAG_SOFTWARE))
     .or_else(|| xmp_text(raw, "xmp", "CreatorTool"))
     .or_else(|| png_text(raw, "Software"));
-    // creator：容器 > EXIF(0x013B Artist) > XMP(dc:creator) > PNG Author
-    u.creator = container_text(
-        raw,
-        ContainerSource::QuickTimeMdta,
-        "com.apple.quicktime.author",
-    )
-    .or_else(|| container_text(raw, ContainerSource::Udta, "©aut"))
-    .map(alloc::string::String::from)
-    .or_else(|| exif_primary_text(raw, TAG_ARTIST))
-    .or_else(|| xmp_text(raw, "dc", "creator"))
-    .or_else(|| png_text(raw, "Author"));
-    // 新字段：description / copyright / title
-    u.description = exif_primary_text(raw, TAG_IMAGE_DESCRIPTION)
+    // creator：sidecar > 容器 > EXIF(0x013B Artist) > XMP(dc:creator) > PNG Author
+    u.creator = xmp_sidecar_text(raw, "dc", "creator")
+        .or_else(|| {
+            container_text(raw, ContainerSource::QuickTimeMdta, "com.apple.quicktime.author")
+                .map(alloc::string::String::from)
+        })
+        .or_else(|| {
+            container_text(raw, ContainerSource::Udta, "©aut").map(alloc::string::String::from)
+        })
+        .or_else(|| exif_primary_text(raw, TAG_ARTIST))
+        .or_else(|| xmp_text(raw, "dc", "creator"))
+        .or_else(|| png_text(raw, "Author"));
+    // 新字段：description / copyright / title；sidecar 居首
+    u.description = xmp_sidecar_text(raw, "dc", "description")
+        .or_else(|| exif_primary_text(raw, TAG_IMAGE_DESCRIPTION))
         .or_else(|| xmp_text(raw, "dc", "description"))
         .or_else(|| png_text(raw, "Description"));
-    u.copyright = exif_primary_text(raw, TAG_COPYRIGHT)
+    u.copyright = xmp_sidecar_text(raw, "dc", "rights")
+        .or_else(|| exif_primary_text(raw, TAG_COPYRIGHT))
         .or_else(|| xmp_text(raw, "dc", "rights"))
         .or_else(|| png_text(raw, "Copyright"));
-    u.title = xmp_text(raw, "dc", "title").or_else(|| png_text(raw, "Title"));
+    u.title = xmp_sidecar_text(raw, "dc", "title")
+        .or_else(|| xmp_text(raw, "dc", "title"))
+        .or_else(|| png_text(raw, "Title"));
     // created (EXIF 层)：DateTimeOriginal 优先，IFD0 次之；PNG Creation Time 末位兜底。
     // 最终优先级在本函数末尾统一排序：容器 mdta > 结构(mvhd/EBML) > EXIF > PNG。
     if u.created.is_none()
@@ -1664,5 +1680,24 @@ mod tests {
         // structural.gps 须胜过 EXIF GPS（10°N, 20°E）
         assert_eq!(g.lat_e7, 500_000_000);
         assert_eq!(g.lon_e7, 1_000_000_000);
+    }
+
+    #[test]
+    fn sidecar_description_beats_exif_and_embedded_xmp() {
+        use crate::model::RawTags;
+        let raw = RawTags {
+            exif: vec![ExifTag {
+                ifd: IfdKind::Primary,
+                tag: 0x010E, // ImageDescription
+                value: Value::Text(String::from("from-exif")),
+            }],
+            xmp: vec![xmp("dc", "description", "from-embedded")],
+            xmp_sidecar: vec![xmp("dc", "description", "from-sidecar")],
+            container: vec![],
+            text: vec![],
+        };
+        let mut w = Vec::new();
+        let u = normalize(&raw, &StructuralFields::default(), &mut w);
+        assert_eq!(u.description.as_deref(), Some("from-sidecar"));
     }
 }
