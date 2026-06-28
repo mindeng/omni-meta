@@ -95,4 +95,40 @@ mod tests {
         let manual = crate::normalize::normalize(&raw, &meta.structural, &mut w);
         assert_eq!(merged.unified, manual); // Unified 字节级一致
     }
+
+    #[test]
+    fn empty_sidecar_no_change_no_warning() {
+        let img = jpeg_with_make();
+        let meta = read_slice(&img, Options::default()).unwrap();
+        let before_warns = meta.warnings.len();
+        let after = meta.clone().with_xmp_sidecar(b"", crate::limits::Limits::default());
+        assert_eq!(after.unified, meta.unified); // 空包不改 Unified
+        assert_eq!(after.warnings.len(), before_warns); // 空包不增告警
+        assert!(after.raw.xmp_sidecar.is_empty());
+    }
+
+    #[test]
+    fn invalid_utf8_sidecar_warns_truncated_unified_unchanged() {
+        use crate::model::WarnKind;
+        let img = jpeg_with_make();
+        let meta = read_slice(&img, Options::default()).unwrap();
+        let after = meta
+            .clone()
+            .with_xmp_sidecar(&[0xFF, 0xFE, 0x00], crate::limits::Limits::default());
+        assert_eq!(after.unified, meta.unified); // 无效字节不改 Unified
+        assert!(after.warnings.iter().any(|w| w.kind == WarnKind::Truncated));
+    }
+
+    #[test]
+    fn double_sidecar_is_stable() {
+        let img = jpeg_with_make();
+        let meta = read_slice(&img, Options::default()).unwrap();
+        let once = meta
+            .clone()
+            .with_xmp_sidecar(SIDECAR, crate::limits::Limits::default());
+        let twice = once
+            .clone()
+            .with_xmp_sidecar(SIDECAR, crate::limits::Limits::default());
+        assert_eq!(twice.unified, once.unified); // 重复注入同一 sidecar，Unified 稳定
+    }
 }
