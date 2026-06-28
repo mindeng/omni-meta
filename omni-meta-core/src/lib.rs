@@ -18,6 +18,7 @@ pub(crate) mod limits;
 pub(crate) mod model;
 pub(crate) mod normalize;
 pub(crate) mod probe;
+pub(crate) mod sidecar;
 pub(crate) mod strip;
 
 pub use adapters::push::PushParser;
