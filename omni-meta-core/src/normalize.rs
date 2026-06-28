@@ -8,20 +8,9 @@
 use alloc::vec::Vec;
 
 use crate::model::{
-    ContainerSource, DateTimeParts, Gps, IfdKind, Orientation, RawTags, Unified, Value, WarnKind,
-    Warning,
+    ContainerSource, DateTimeParts, Gps, IfdKind, Orientation, RawTags, StructuralFields, Unified,
+    Value, WarnKind, Warning,
 };
-
-/// 二进制结构来源候选(无命名空间、parser 权威):容器结构头与二进制 udta。
-/// 由 `driver::Collector` 从 `Event::Field` 累积,作为 normalize 的一类来源传入。
-#[derive(Debug, Clone, Default)]
-pub struct StructuralFields {
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-    pub duration_ms: Option<u64>,
-    pub created: Option<DateTimeParts>,
-    pub gps: Option<Gps>,
-}
 
 const TAG_MAKE: u16 = 0x010F;
 const TAG_MODEL: u16 = 0x0110;
@@ -745,6 +734,7 @@ mod tests {
                 },
             ]),
             xmp: Vec::new(),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -765,6 +755,7 @@ mod tests {
                 value: Value::U16(99),
             }]),
             xmp: Vec::new(),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -794,6 +785,7 @@ mod tests {
                 xmp("tiff", "ImageWidth", "1280"),
                 xmp("tiff", "ImageLength", "720"),
             ]),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -815,6 +807,7 @@ mod tests {
                 value: Value::Text(String::from("ExifMake")),
             }]),
             xmp: Vec::from([xmp("tiff", "Make", "XmpMake")]),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -841,6 +834,7 @@ mod tests {
                 },
             ]),
             xmp: Vec::new(),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -863,6 +857,7 @@ mod tests {
         let raw = RawTags {
             exif: Vec::from([exif_tag(IfdKind::Exif, 0x9003, "2003:01:24 09:20:00")]),
             xmp: Vec::new(),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -884,6 +879,7 @@ mod tests {
                 exif_tag(IfdKind::Exif, 0x9011, "+09:00"),
             ]),
             xmp: Vec::new(),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -900,6 +896,7 @@ mod tests {
                 exif_tag(IfdKind::Exif, 0x9010, "-05:00"),
             ]),
             xmp: Vec::new(),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -918,6 +915,7 @@ mod tests {
                 exif_tag(IfdKind::Exif, 0x9003, "2003:01:24 09:20:00"),
             ]),
             xmp: Vec::new(),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -938,6 +936,7 @@ mod tests {
             let raw = RawTags {
                 exif: Vec::from([exif_tag(IfdKind::Exif, 0x9003, bad)]),
                 xmp: Vec::new(),
+                xmp_sidecar: Vec::new(),
                 container: Vec::new(),
                 text: Vec::new(),
             };
@@ -994,6 +993,7 @@ mod tests {
                 },
             ]),
             xmp: Vec::new(),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -1042,6 +1042,7 @@ mod tests {
                 }, // 10.5 m
             ]),
             xmp: Vec::new(),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -1070,6 +1071,7 @@ mod tests {
                 },
             ]),
             xmp: Vec::new(),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -1101,6 +1103,7 @@ mod tests {
                 xmp_p("exif", "GPSLatitude", "39,57.0900N"),
                 xmp_p("exif", "GPSLongitude", "116,23.4000E"),
             ]),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -1185,6 +1188,7 @@ mod tests {
                 xmp_p("exif", "GPSLatitude", "39,57.0900N"),
                 xmp_p("exif", "GPSLongitude", "116,23.4000E"),
             ]),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -1204,6 +1208,7 @@ mod tests {
                 xmp_p("exif", "GPSLatitude", "39.9515N"),
                 xmp_p("exif", "GPSLongitude", "116.3900E"),
             ]),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -1224,6 +1229,7 @@ mod tests {
                 xmp_p("exif", "GPSLatitude", "39,57.0900N"),
                 xmp_p("exif", "GPSLongitude", "116,23.4000E"),
             ]),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -1250,6 +1256,7 @@ mod tests {
                 name: alloc::string::String::from("CreatorTool"),
                 value: alloc::string::String::from("XmpSW")
             }],
+            xmp_sidecar: Vec::new(),
             container: alloc::vec![ContainerTag {
                 source: ContainerSource::QuickTimeMdta,
                 key: alloc::string::String::from("com.apple.quicktime.software"),
@@ -1272,6 +1279,7 @@ mod tests {
                 value: Value::Text(alloc::string::String::from("ExifSW"))
             }],
             xmp: Vec::new(),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -1288,6 +1296,7 @@ mod tests {
                 name: alloc::string::String::from("CreatorTool"),
                 value: alloc::string::String::from("XmpSW")
             }],
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -1443,6 +1452,7 @@ mod tests {
         let raw_udta = RawTags {
             exif: Vec::new(),
             xmp: Vec::new(),
+            xmp_sidecar: Vec::new(),
             container: alloc::vec![ContainerTag {
                 source: ContainerSource::Udta,
                 key: alloc::string::String::from("©aut"),
@@ -1463,6 +1473,7 @@ mod tests {
                 value: Value::Text(alloc::string::String::from("Shooter"))
             }],
             xmp: Vec::new(),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };
@@ -1635,6 +1646,7 @@ mod tests {
                 },
             ]),
             xmp: Vec::new(),
+            xmp_sidecar: Vec::new(),
             container: Vec::new(),
             text: Vec::new(),
         };

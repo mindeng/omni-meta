@@ -4,7 +4,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum FileFormat {
     Jpeg,
     Png,
@@ -16,6 +16,7 @@ pub enum FileFormat {
     Mov,
     Mkv,
     Webm,
+    #[default]
     Unknown,
 }
 
@@ -165,11 +166,25 @@ pub struct ExifTag {
     pub value: Value,
 }
 
+/// 二进制结构来源候选（无命名空间、parser 权威）：容器结构头与二进制 udta。
+/// 由 `driver::Collector` 从 `Event::Field` 累积，作为 normalize 的一类来源传入；
+/// 并由 `finalize` 存入 `Metadata.structural` 供 `with_xmp_sidecar` 重投影复用。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StructuralFields {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub duration_ms: Option<u64>,
+    pub created: Option<DateTimeParts>,
+    pub gps: Option<Gps>,
+}
+
 /// 原始标签层，按命名空间分类（本计划只有 exif，后续加 xmp/iptc/icc/container）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RawTags {
     pub exif: Vec<ExifTag>,
     pub xmp: Vec<XmpProperty>,
+    /// 旁挂 `.xmp` sidecar 来源（`Metadata::with_xmp_sidecar` 注入），与内嵌 `xmp` 分列以留 provenance。
+    pub xmp_sidecar: Vec<XmpProperty>,
     pub container: Vec<ContainerTag>,
     pub text: Vec<TextTag>,
 }
@@ -213,12 +228,14 @@ pub struct Warning {
 }
 
 /// 顶层解析结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Metadata {
     pub unified: Unified,
     pub raw: RawTags,
     pub warnings: Vec<Warning>,
     pub format: FileFormat,
+    /// 重投影所需的结构来源快照（内部辅助；内容已全在 `unified` 暴露，故 `pub(crate)`）。
+    pub(crate) structural: StructuralFields,
 }
 
 #[cfg(test)]

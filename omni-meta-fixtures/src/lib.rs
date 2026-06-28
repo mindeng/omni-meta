@@ -1090,15 +1090,13 @@ pub fn xmp_corpus() -> Vec<(&'static str, Vec<u8>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use omni_meta::{FileFormat, RawTags, Unified, WarnKind, Warning, XmpProperty};
+    use omni_meta::{FileFormat, WarnKind, Warning, XmpProperty};
 
     fn meta_with_warnings(ws: Vec<Warning>) -> Metadata {
-        Metadata {
-            unified: Unified::default(),
-            raw: RawTags::default(),
-            warnings: ws,
-            format: FileFormat::Png,
-        }
+        let mut m = Metadata::default();
+        m.warnings = ws;
+        m.format = FileFormat::Png;
+        m
     }
 
     #[test]

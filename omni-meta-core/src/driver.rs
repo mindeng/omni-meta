@@ -8,7 +8,8 @@ use crate::codecs;
 use crate::demand::{Demand, Event, MetaParser, PayloadKind};
 use crate::limits::Limits;
 use crate::model::{
-    ContainerTag, ExifTag, Field, FileFormat, Metadata, RawTags, WarnKind, Warning, XmpProperty,
+    ContainerTag, ExifTag, Field, FileFormat, Metadata, RawTags, StructuralFields, WarnKind,
+    Warning, XmpProperty,
 };
 use crate::normalize::normalize;
 
@@ -102,11 +103,12 @@ pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
     let raw = RawTags {
         exif: col.exif,
         xmp: col.xmp,
+        xmp_sidecar: Vec::new(),
         container: col.container,
         text: col.text,
     };
     let mut warnings = col.warnings;
-    let structural = crate::normalize::StructuralFields {
+    let structural = StructuralFields {
         width,
         height,
         duration_ms,
@@ -119,6 +121,7 @@ pub(crate) fn finalize(col: Collector, format: FileFormat) -> Metadata {
         raw,
         warnings,
         format,
+        structural,
     }
 }
 
