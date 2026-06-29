@@ -1124,22 +1124,14 @@ mod tests {
         );
     }
 
-    fn xmp_p(prefix: &str, name: &str, value: &str) -> XmpProperty {
-        XmpProperty {
-            prefix: String::from(prefix),
-            name: String::from(name),
-            value: String::from(value),
-        }
-    }
-
     #[test]
     fn gps_from_xmp_decimal_minutes_form() {
         // exif:GPSLatitude "39,57.0900N"、exif:GPSLongitude "116,23.4000E"
         let raw = RawTags {
             exif: Vec::new(),
             xmp: Vec::from([
-                xmp_p("exif", "GPSLatitude", "39,57.0900N"),
-                xmp_p("exif", "GPSLongitude", "116,23.4000E"),
+                xmp("exif", "GPSLatitude", "39,57.0900N"),
+                xmp("exif", "GPSLongitude", "116,23.4000E"),
             ]),
             xmp_sidecar: Vec::new(),
             container: Vec::new(),
@@ -1223,8 +1215,8 @@ mod tests {
                 },
             ]),
             xmp: Vec::from([
-                xmp_p("exif", "GPSLatitude", "39,57.0900N"),
-                xmp_p("exif", "GPSLongitude", "116,23.4000E"),
+                xmp("exif", "GPSLatitude", "39,57.0900N"),
+                xmp("exif", "GPSLongitude", "116,23.4000E"),
             ]),
             xmp_sidecar: Vec::new(),
             container: Vec::new(),
@@ -1243,8 +1235,8 @@ mod tests {
         let raw = RawTags {
             exif: Vec::new(),
             xmp: Vec::from([
-                xmp_p("exif", "GPSLatitude", "39.9515N"),
-                xmp_p("exif", "GPSLongitude", "116.3900E"),
+                xmp("exif", "GPSLatitude", "39.9515N"),
+                xmp("exif", "GPSLongitude", "116.3900E"),
             ]),
             xmp_sidecar: Vec::new(),
             container: Vec::new(),
@@ -1264,8 +1256,8 @@ mod tests {
         let raw = RawTags {
             exif: Vec::new(),
             xmp: Vec::from([
-                xmp_p("exif", "GPSLatitude", "39,57.0900N"),
-                xmp_p("exif", "GPSLongitude", "116,23.4000E"),
+                xmp("exif", "GPSLatitude", "39,57.0900N"),
+                xmp("exif", "GPSLongitude", "116,23.4000E"),
             ]),
             xmp_sidecar: Vec::new(),
             container: Vec::new(),
